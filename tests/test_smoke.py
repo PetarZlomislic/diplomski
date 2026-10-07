@@ -70,3 +70,22 @@ def test_two_model_sweep_aggregates_to_ten_rows_and_one_curve(tmp_path) -> None:
     assert df.groupby("model").size().to_dict() == {"dummy": 5, "dummy_wide": 5}
     assert [p.name for p in plots] == ["curve_gaussian_noise_f1_macro.png"]
     assert plots[0].stat().st_size > 0
+
+
+def test_resume_from_checkpoint_continues_same_run(tmp_path) -> None:
+    import torch
+
+    from src.train import run
+    from tests.conftest import compose_cfg
+
+    first = run(compose_cfg("+experiment=smoke", f"output_dir={tmp_path}"), {"model": "dummy"})
+    last = first / "checkpoints" / "last.ckpt"
+    steps_one_epoch = torch.load(last, weights_only=False)["global_step"]
+    assert steps_one_epoch > 0
+    cfg = compose_cfg(
+        "+experiment=smoke", "trainer.max_epochs=2", f"resume_from_checkpoint={last.as_posix()}"
+    )
+    second = run(cfg, {"model": "dummy"})
+    assert second == first
+    assert len(list(tmp_path.iterdir())) == 1
+    assert torch.load(last, weights_only=False)["global_step"] == 2 * steps_one_epoch

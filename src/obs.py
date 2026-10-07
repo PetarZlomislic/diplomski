@@ -32,3 +32,8 @@ def config_hash(resolved_cfg: dict[str, Any]) -> str:
 
 def setup_logging(output_dir: Path) -> None:
     """Placeholder until Phase 6."""
+
+
+def resolve_wandb_mode(requested: str, has_internet: bool) -> str:
+    """Offline instead of hanging when the runtime has no internet."""
+    return requested if has_internet else "offline"

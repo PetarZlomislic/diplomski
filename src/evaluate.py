@@ -1,4 +1,5 @@
 """Evaluation entrypoint: checkpoint + degradation -> results rows (test split)."""
+import sys
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -14,7 +15,8 @@ from torch import Tensor
 
 from src.degradations.base import BaseDegradation
 from src.module import LitModule, make_metrics
-from src.results import ResultsRow, append_rows
+from src.env import detect
+from src.results import ResultsRow, append_rows, push_rows
 from src.train import RUN_CONFIG
 
 RESULTS_FILE = "results.csv"
@@ -52,6 +54,7 @@ def evaluate(
     degradation_name: str,
     severities: list[float],
     degradation_seed: int,
+    results_repo: str | None = None,
 ) -> list[ResultsRow]:
     ckpt_path, rd, ckpt_kind = resolve_ckpt(ckpt, run_dir)
     run = OmegaConf.load(rd / RUN_CONFIG)
@@ -101,11 +104,14 @@ def evaluate(
             )
         )
     append_rows(rows, rd / RESULTS_FILE)
+    env = detect()
+    if results_repo and env.has_internet:
+        push_rows(rd / RESULTS_FILE, results_repo, env.secret("HF_TOKEN"))
     return rows
 
 
 @hydra.main(config_path="../configs", config_name="evaluate", version_base="1.3")
-def main(cfg: DictConfig) -> None:
+def _hydra_main(cfg: DictConfig) -> None:
     evaluate(
         run_dir=cfg.run_dir,
         ckpt=str(cfg.ckpt),
@@ -113,7 +119,13 @@ def main(cfg: DictConfig) -> None:
         degradation_name=HydraConfig.get().runtime.choices["degradation"],
         severities=list(cfg.severities),
         degradation_seed=cfg.degradation_seed,
+        results_repo=cfg.results_repo,
     )
+
+
+def main() -> None:
+    sys.argv = detect().hydra_argv(sys.argv)
+    _hydra_main()
 
 
 if __name__ == "__main__":

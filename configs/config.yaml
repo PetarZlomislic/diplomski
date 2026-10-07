@@ -15,6 +15,9 @@ threshold: 0.5
 # Resolved at runtime from src/env.py — do NOT hardcode a path here.
 output_dir: null
 
+resume_from_checkpoint: null # path to a .ckpt; continues that run in its own dir
+ckpt_interval_min: 30        # wall-clock checkpoint interval (Kaggle has a 9 h hard cap)
+
 # Hydra's own per-run working dir (configs, .hydra/). Durable artifacts go under output_dir.
 hydra:
   run:

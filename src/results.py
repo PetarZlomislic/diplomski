@@ -38,3 +38,24 @@ def append_rows(rows: list[ResultsRow], path: Path) -> None:
             writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row))
+
+
+def push_rows(csv_path: Path, repo_id: str, token: str | None) -> bool:
+    """Upload a run's results CSV to a Hub dataset repo. Never raises: a failed push must not
+    kill the run, since the local file is still written."""
+    import logging
+
+    try:
+        from huggingface_hub import HfApi
+
+        HfApi(token=token).upload_file(
+            path_or_fileobj=str(csv_path),
+            path_in_repo=f"results/{csv_path.parent.name}.csv",
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"results for {csv_path.parent.name}",
+        )
+        return True
+    except Exception as e:  # network, auth, missing repo, ...
+        logging.getLogger(__name__).warning("results push to %s failed: %s", repo_id, e)
+        return False
