@@ -7,5 +7,16 @@ defaults:
 
 seed: 0
 
+# Multi-label decision threshold. The one place it is set; affects every reported metric.
+threshold: 0.5
+
 # Resolved at runtime from src/env.py — do NOT hardcode a path here.
 output_dir: null
+
+# Hydra's own per-run working dir (configs, .hydra/). Durable artifacts go under output_dir.
+hydra:
+  run:
+    dir: hydra_runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: hydra_runs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

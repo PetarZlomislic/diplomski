@@ -41,6 +41,7 @@ htmlcov/
 
 # Outputs and data
 /outputs/
+/hydra_runs/
 /lightning_logs/
 /data/
 *.ckpt

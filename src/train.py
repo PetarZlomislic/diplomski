@@ -24,12 +24,13 @@ def run(cfg: DictConfig) -> Path:
     module = LitModule(
         model_cfg=OmegaConf.to_container(cfg.model, resolve=True),
         optim_cfg=OmegaConf.to_container(cfg.optim, resolve=True),
+        threshold=cfg.threshold,
     )
     ckpt_cb = ModelCheckpoint(
         dirpath=output_dir / "checkpoints",
         filename="best",
-        monitor="val/loss",
-        mode="min",
+        monitor="val/f1_macro",
+        mode="max",
         save_last=True,
     )
     trainer = L.Trainer(**cfg.trainer, callbacks=[ckpt_cb], default_root_dir=output_dir)
