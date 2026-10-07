@@ -40,9 +40,9 @@ htmlcov/
 *~
 
 # Outputs and data
-outputs/
-lightning_logs/
-data/
+/outputs/
+/lightning_logs/
+/data/
 *.ckpt
 *.pth
 *.pt
