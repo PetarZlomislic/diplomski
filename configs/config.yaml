@@ -1,0 +1,11 @@
+defaults:
+  - model: dummy
+  - data: dummy
+  - optim: adamw
+  - trainer: default
+  - _self_
+
+seed: 0
+
+# Resolved at runtime from src/env.py — do NOT hardcode a path here.
+output_dir: null

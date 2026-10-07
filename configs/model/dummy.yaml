@@ -1,0 +1,5 @@
+_target_: src.models.dummy.DummyModel
+num_classes: ${data.num_classes}
+in_channels: ${data.in_channels}
+image_size: ${data.image_size}
+hidden_dim: 0

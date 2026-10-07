@@ -1,0 +1,6 @@
+max_epochs: 10
+accelerator: auto
+devices: 1
+enable_progress_bar: false
+enable_model_summary: false
+logger: false

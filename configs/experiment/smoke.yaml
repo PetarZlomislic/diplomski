@@ -1,0 +1,10 @@
+# @package _global_
+data:
+  n_samples: 8
+  image_size: 16
+  num_classes: 2
+  batch_size: 4
+
+trainer:
+  max_epochs: 1
+  accelerator: cpu
