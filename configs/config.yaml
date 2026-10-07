@@ -18,6 +18,16 @@ output_dir: null
 resume_from_checkpoint: null # path to a .ckpt; continues that run in its own dir
 ckpt_interval_min: 30        # wall-clock checkpoint interval (Kaggle has a 9 h hard cap)
 
+obs:
+  heartbeat_s: 30            # TIME interval, not steps
+  jsonl: true
+  warn_data_wait_frac: 0.3
+
+wandb:
+  enabled: false             # default off; smoke test must not need network
+  project: thesis
+  mode: online               # forced to "offline" when the runtime has no internet
+
 # Hydra's own per-run working dir (configs, .hydra/). Durable artifacts go under output_dir.
 hydra:
   run:
