@@ -41,3 +41,29 @@ def test_fusion_handles_none_modality() -> None:
 def test_single_modality_passes_through() -> None:
     x = torch.randn(5, 4)
     assert torch.equal(PassthroughFusion({"optical": 4})({"optical": x}), x)
+
+
+def test_evaluate_reconstructs_model_without_model_override(trained_run, make_cfg) -> None:
+    from src.evaluate import resolve_ckpt
+    from src.module import LitModule
+
+    run_dir = trained_run("dummy_wide")
+    ckpt_path, _, _ = resolve_ckpt("best", str(run_dir))
+    loaded = LitModule.load_from_checkpoint(ckpt_path, map_location="cpu").model
+    expected = instantiate(make_cfg("model=dummy_wide", "+experiment=smoke").model)
+    got = {k: v.shape for k, v in loaded.state_dict().items()}
+    want = {k: v.shape for k, v in expected.state_dict().items()}
+    assert got == want
+    assert type(loaded) is type(expected)
+
+
+def test_checkpoint_selection_defaults_to_best_and_is_recorded(trained_run, make_cfg) -> None:
+    from src.evaluate import evaluate
+
+    eval_cfg = make_cfg(config_name="evaluate")
+    assert eval_cfg.ckpt == "best"
+    run_dir = trained_run("dummy")
+    (row,) = evaluate(
+        str(run_dir), eval_cfg.ckpt, eval_cfg.degradation, "none", [0.0], eval_cfg.degradation_seed
+    )
+    assert row.ckpt_kind == "best"

@@ -1,11 +1,13 @@
 defaults:
   - model: dummy
   - data: dummy
+  - degradation: none
   - optim: adamw
   - trainer: default
   - _self_
 
 seed: 0
+degradation_seed: 12345      # deliberately independent of `seed`
 
 # Multi-label decision threshold. The one place it is set; affects every reported metric.
 threshold: 0.5

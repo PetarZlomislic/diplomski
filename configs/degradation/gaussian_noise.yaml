@@ -1,0 +1,3 @@
+_target_: src.degradations.gaussian_noise.GaussianNoise
+modality: optical
+sigma_max: 1.0

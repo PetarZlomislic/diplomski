@@ -1,0 +1,15 @@
+defaults:
+  - degradation: none
+  - _self_
+
+run_dir: null                # training output dir; required unless ckpt is a path
+ckpt: best                   # best | last | <path to .ckpt>
+severities: [0.0, 0.25, 0.5, 0.75, 1.0]
+degradation_seed: 12345      # deliberately independent of the training seed
+
+hydra:
+  run:
+    dir: hydra_runs/eval/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: hydra_runs/eval-multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

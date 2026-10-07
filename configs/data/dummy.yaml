@@ -7,5 +7,5 @@ image_size: 32
 n_samples: 64
 batch_size: 8
 num_workers: 0
-seed: ${seed}
+seed: 0  # dataset seed: fixed, independent of the training seed
 data_uri: ""
