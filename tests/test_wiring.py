@@ -10,7 +10,9 @@ def _batch(cfg, b: int = 3) -> dict[str, torch.Tensor]:
 
 
 def test_model_interpolates_shapes_from_data(make_cfg) -> None:
-    cfg = make_cfg("data.num_classes=7", "data.image_size=8", "data.in_channels={optical: 5, sar: 3}")
+    cfg = make_cfg(
+        "data.num_classes=7", "data.image_size=8", "data.in_channels={optical: 5, sar: 3}"
+    )
     assert cfg.model.num_classes == 7
     assert cfg.model.image_size == 8
     assert dict(cfg.model.in_channels) == {"optical": 5, "sar": 3}
