@@ -52,3 +52,21 @@ def test_severity_sweep_writes_one_row_each_and_zero_equals_clean(trained_run) -
     (clean,) = _eval(run_dir, "none", [0.0])
     for k in ("f1_macro", "f1_micro", "accuracy"):
         assert getattr(rows[0], k) == getattr(clean, k), k
+
+
+def test_two_model_sweep_aggregates_to_ten_rows_and_one_curve(tmp_path) -> None:
+    from src.aggregate import aggregate
+    from src.train import run
+    from tests.conftest import compose_cfg
+
+    root = tmp_path / "runs"
+    for model in ("dummy", "dummy_wide"):
+        cfg = compose_cfg(f"model={model}", "+experiment=smoke", f"output_dir={root}")
+        run_dir = run(cfg, {"model": model, "data": "dummy"})
+        _eval(run_dir, "gaussian_noise", SEVERITIES)
+        _eval(run_dir, "gaussian_noise", SEVERITIES)  # re-run must not double-count
+    df, plots = aggregate(root, tmp_path / "agg")
+    assert len(df) == 10
+    assert df.groupby("model").size().to_dict() == {"dummy": 5, "dummy_wide": 5}
+    assert [p.name for p in plots] == ["curve_gaussian_noise_f1_macro.png"]
+    assert plots[0].stat().st_size > 0
