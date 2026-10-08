@@ -22,7 +22,7 @@ stop_margin_min: 15          # stop this long before the runtime's wall-clock ca
 
 obs:
   heartbeat_s: 30            # TIME interval, not steps
-  jsonl: true
+  jsonl: true                # false: stdout only, no <run dir>/run.jsonl
   warn_data_wait_frac: 0.3
 
 wandb:

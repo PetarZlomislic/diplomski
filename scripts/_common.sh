@@ -15,7 +15,11 @@ load_env() {
     [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
     key=${BASH_REMATCH[2]}
     val=${BASH_REMATCH[3]}
-    if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then val=${BASH_REMATCH[1]}; fi
+    if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then
+      val=${BASH_REMATCH[1]}
+    else
+      val=$(sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//' <<<"$val")  # inline comment
+    fi
     [[ -n "${!key+x}" ]] || export "$key=$val"
   done < "$f"
 }

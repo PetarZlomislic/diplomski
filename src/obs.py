@@ -121,9 +121,10 @@ class _JsonlHandler(logging.Handler):
                       message=record.getMessage())
 
 
-def setup_logging(run_id: str, output_dir: Path) -> RunLog:
-    """Create the run's JSONL log and route warnings from stdlib logging into it."""
-    log = RunLog(run_id, output_dir / "run.jsonl")
+def setup_logging(run_id: str, output_dir: Path, to_file: bool = True) -> RunLog:
+    """Create the run's JSONL log (stdout, plus <output_dir>/run.jsonl unless `to_file` is
+    False) and route warnings from stdlib logging into it."""
+    log = RunLog(run_id, output_dir / "run.jsonl" if to_file else None)
     root = logging.getLogger()
     for h in [h for h in root.handlers if isinstance(h, _JsonlHandler)]:
         root.removeHandler(h)

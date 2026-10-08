@@ -10,6 +10,7 @@ results_repo: null           # HF dataset repo ("user/name") to push rows to; nu
 
 obs:
   heartbeat_s: 30
+  jsonl: true                # false: stdout only, no <run dir>/run.jsonl
 
 hydra:
   run:

@@ -154,3 +154,36 @@ def test_wandb_secret_forwarded_only_when_set(repo: Path) -> None:
     (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "m=1",
                                env_overrides={"WANDB_API_KEY": None}).stdout)
     assert "WANDB_API_KEY" not in cmd and cmd[cmd.index("-s") + 1] == "HF_TOKEN"
+
+
+STUB_HF = """#!/usr/bin/env bash
+# Stand-in for `hf`: echoes its args (which contain a 40-hex commit), then hf 2.x --json output.
+echo "args: $*"
+echo '{"message": "Job started", "id": "6ac758e4df2184ac91acab1e", "name": "hf_entry-x", \
+"url": "https://huggingface.co/jobs/peroz1/6ac758e4df2184ac91acab1e"}'
+"""
+
+
+def test_real_submission_parses_namespaced_job_id_from_json(repo: Path) -> None:
+    bin_dir = repo.parent / "stub-bin"
+    bin_dir.mkdir()
+    (bin_dir / "hf").write_text(STUB_HF, encoding="utf-8", newline="\n")
+    path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    res = _run(repo, "submit_hf.sh", "model=dummy", env_overrides={"PATH": path})
+    assert res.returncode == 0, res.stderr
+    assert "--json" in res.stdout.split("args: ", 1)[1]
+    assert "job_id=peroz1/6ac758e4df2184ac91acab1e" in res.stdout
+    assert "hf jobs logs -f peroz1/6ac758e4df2184ac91acab1e" in res.stdout
+
+
+def test_dotenv_strips_inline_comments(repo: Path) -> None:
+    (repo / ".env").write_text(
+        "HF_BUCKET=acme/real   # Hugging Face bucket\nKAGGLE_KERNEL='acme/k # kept'\n",
+        encoding="utf-8",
+    )
+    unset = {"HF_BUCKET": None, "KAGGLE_KERNEL": None}
+    (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "--allow-dirty", "m=1",
+                               env_overrides=unset).stdout)
+    assert "hf://buckets/acme/real/ckpt:/ckpt" in cmd
+    kg = _run(repo, "submit_kaggle.sh", "--dry-run", "--allow-dirty", "m=1", env_overrides=unset)
+    assert "# kernel acme/k # kept " in kg.stdout

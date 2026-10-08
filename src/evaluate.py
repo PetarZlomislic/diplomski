@@ -18,8 +18,8 @@ from src.callbacks.sysmetrics import SysMetricsCallback
 from src.degradations.base import BaseDegradation
 from src.env import detect
 from src.module import LitModule, make_metrics
-from src.obs import failure_fields, run_header, setup_logging
-from src.results import RESULTS_FILE, RUN_CONFIG, ResultsRow, append_rows, push_rows
+from src.obs import failure_fields, new_run_id, run_header, setup_logging
+from src.results import RESULTS_DIR, RUN_CONFIG, ResultsRow, append_rows, push_rows
 
 
 def resolve_ckpt(ckpt: str, run_dir: str | None) -> tuple[Path, Path, str]:
@@ -31,6 +31,12 @@ def resolve_ckpt(ckpt: str, run_dir: str | None) -> tuple[Path, Path, str]:
         return rd / "checkpoints" / f"{ckpt}.ckpt", rd, ckpt
     path = Path(ckpt)
     return path, Path(run_dir) if run_dir else path.parent.parent, str(path)
+
+
+def _sync(device: torch.device) -> None:
+    """Wait for queued GPU work so latency measures the forward pass, not the launch."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def degraded_batches(
@@ -55,13 +61,21 @@ def evaluate(
     degradation_seed: int,
     results_repo: str | None = None,
     heartbeat_s: float = 30.0,
+    jsonl: bool = True,
 ) -> list[ResultsRow]:
+    """Evaluate one checkpoint at each severity; write `<run dir>/results/<eval_id>.csv`.
+
+    Every call writes its own file, so evaluations of the same run in parallel (e.g. remote
+    jobs sharing a bucket) never append to one file concurrently.
+    """
     ckpt_path, rd, ckpt_kind = resolve_ckpt(ckpt, run_dir)
     run = OmegaConf.load(rd / RUN_CONFIG)
     meta, train_cfg = run.meta, run.cfg
     env = detect()
-    log = setup_logging(meta.run_id, rd)
-    eval_cfg = {"ckpt": str(ckpt_path), "ckpt_kind": ckpt_kind, "degradation": degradation_name,
+    log = setup_logging(meta.run_id, rd, to_file=jsonl)
+    eval_id = new_run_id()
+    eval_cfg = {"eval_id": eval_id, "ckpt": str(ckpt_path), "ckpt_kind": ckpt_kind,
+                "degradation": degradation_name,
                 "degradation_cfg": OmegaConf.to_container(degradation_cfg, resolve=True),
                 "severities": list(severities), "degradation_seed": degradation_seed}
     log.emit("run_start", entrypoint="evaluate", runtime=str(env.runtime),
@@ -79,11 +93,13 @@ def evaluate(
         log.close()
         raise
     heartbeat.stop()
-    append_rows(rows, rd / RESULTS_FILE)
+    results_csv = rd / RESULTS_DIR / f"{eval_id}.csv"
+    append_rows(rows, results_csv)
     pushed = None
     if results_repo and env.has_internet:
-        pushed = push_rows(rd / RESULTS_FILE, results_repo, env.secret("HF_TOKEN"))
-    log.emit("run_end", status="ok", entrypoint="evaluate", rows=len(rows),
+        pushed = push_rows(results_csv, results_repo, env.secret("HF_TOKEN"))
+    log.emit("run_end", status="ok", entrypoint="evaluate", eval_id=eval_id, rows=len(rows),
+             results_file=str(results_csv),
              duration_s=round(time.monotonic() - t0, 2), results_pushed=pushed)
     log.close()
     return rows
@@ -92,7 +108,8 @@ def evaluate(
 @torch.no_grad()
 def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradation_name,
               severities, degradation_seed, log, heartbeat) -> list[ResultsRow]:
-    module = LitModule.load_from_checkpoint(ckpt_path, map_location="cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    module = LitModule.load_from_checkpoint(ckpt_path, map_location=device)
     module.eval()
     threshold = float(module.hparams.threshold)
     num_classes = int(module.hparams.model_cfg["num_classes"])
@@ -108,12 +125,17 @@ def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradatio
 
     rows = []
     for i, severity in enumerate(severities):
-        metrics = make_metrics(num_classes, threshold)
+        metrics = make_metrics(num_classes, threshold).to(device)
         elapsed, n = 0.0, 0
+        # Degrade on CPU (the generator lives there), then move to the model's device.
         batches = degraded_batches(datamodule, degradation, severity, degradation_seed)
         for j, batch in enumerate(batches):
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
+            _sync(device)
             t0 = time.perf_counter()
             logits = module(batch)
+            _sync(device)
             elapsed += time.perf_counter() - t0
             n += logits.shape[0]
             metrics.update(logits, batch["label"].int())
@@ -157,6 +179,7 @@ def _hydra_main(cfg: DictConfig) -> None:
         degradation_seed=cfg.degradation_seed,
         results_repo=cfg.results_repo,
         heartbeat_s=cfg.obs.heartbeat_s,
+        jsonl=cfg.obs.jsonl,
     )
 
 

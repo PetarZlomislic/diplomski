@@ -77,7 +77,7 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
         output_dir = get_output_root(cfg.get("output_dir")) / new_run_id()
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = output_dir.name
-    log = setup_logging(run_id, output_dir)
+    log = setup_logging(run_id, output_dir, to_file=cfg.obs.jsonl)
 
     resolved = OmegaConf.to_container(cfg, resolve=True)
     log.emit("run_start", entrypoint="train", runtime=str(env.runtime),
@@ -153,9 +153,11 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
     # One clean (undegraded) test-split row per training run, from the best checkpoint.
     from src.evaluate import evaluate
 
-    evaluate(str(output_dir), "best", OmegaConf.create(CLEAN), "none", [0.0],
+    # No best.ckpt if training stopped before its first validation (e.g. time budget).
+    ckpt = "best" if (ckpt_dir / "best.ckpt").exists() else "last"
+    evaluate(str(output_dir), ckpt, OmegaConf.create(CLEAN), "none", [0.0],
              cfg.degradation_seed, results_repo=cfg.get("results_repo"),
-             heartbeat_s=cfg.obs.heartbeat_s)
+             heartbeat_s=cfg.obs.heartbeat_s, jsonl=cfg.obs.jsonl)
     return output_dir
 
 

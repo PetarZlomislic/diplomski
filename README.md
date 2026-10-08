@@ -10,7 +10,7 @@ uv run python -m src.train +experiment=smoke      # -> outputs/<run_id>/{checkpo
 uv run python -m src.evaluate run_dir=outputs/<run_id> degradation=gaussian_noise
 uv run python -m src.aggregate outputs            # merged CSV + degradation curves
 ```
-Each run appends to its own `outputs/<run_id>/results.csv`; `aggregate` merges them (no locking).
+Every evaluation writes its own `outputs/<run_id>/results/<eval_id>.csv`; `aggregate` merges them.
 
 ## Add a model: `src/models/tiny_cnn.py`
 ```python

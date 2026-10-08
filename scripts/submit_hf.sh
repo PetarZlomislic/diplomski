@@ -52,7 +52,7 @@ secrets=(-s HF_TOKEN)
 [[ -n "${WANDB_API_KEY:-}" ]] && secrets+=(-s WANDB_API_KEY)
 
 cmd=(hf jobs uv run
-  --flavor "$flavor" --timeout "$timeout" -d
+  --flavor "$flavor" --timeout "$timeout" -d --json
   "${secrets[@]}"
   -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry" -e MAX_RUNTIME_S="$timeout_s"
   -v "hf://buckets/$bucket/ckpt:/ckpt"
@@ -66,9 +66,10 @@ fi
 
 out=$("${cmd[@]}")
 echo "$out"
-# Prefer the namespaced form (owner/id) that `hf jobs logs` accepts as-is.
-job_id=$(grep -oE '[A-Za-z0-9._-]+/[0-9a-f]{24}' <<<"$out" | grep -v '^jobs/' | head -1 || true)
-[[ -n "$job_id" ]] || job_id=$(grep -oE '[0-9a-f]{24}' <<<"$out" | head -1 || true)
-[[ -n "$job_id" ]] || die "could not parse a job id from the output above"
+# The --json result carries the job URL .../jobs/<owner>/<id>; take owner/id from it only,
+# never from other hex strings in the output (e.g. the pinned commit in the script URL).
+job_id=$(grep -oE 'huggingface\.co/jobs/[^/"[:space:]]+/[0-9a-f]{24}\b' <<<"$out" \
+  | head -1 | sed 's#.*/jobs/##' || true)
+[[ -n "$job_id" ]] || die "could not find the job URL in the output above"
 echo "job_id=$job_id"
-echo "follow: hf jobs logs -f $job_id"
+echo "follow: uv run hf jobs logs -f $job_id"

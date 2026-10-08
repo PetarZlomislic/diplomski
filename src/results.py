@@ -27,7 +27,7 @@ class ResultsRow:
 
 FIELDNAMES = [f.name for f in fields(ResultsRow)]
 RUN_CONFIG = "run_config.yaml"
-RESULTS_FILE = "results.csv"
+RESULTS_DIR = "results"  # <run dir>/results/<eval_id>.csv, one file per evaluation
 
 
 def append_rows(rows: list[ResultsRow], path: Path) -> None:
@@ -43,19 +43,20 @@ def append_rows(rows: list[ResultsRow], path: Path) -> None:
 
 
 def push_rows(csv_path: Path, repo_id: str, token: str | None) -> bool:
-    """Upload a run's results CSV to a Hub dataset repo. Never raises: a failed push must not
-    kill the run, since the local file is still written."""
+    """Upload one evaluation's CSV to `results/<run_id>/<eval_id>.csv` in a Hub dataset repo.
+    Never raises: a failed push must not kill the run, since the local file is still written."""
     import logging
 
+    run_id = csv_path.parent.parent.name
     try:
         from huggingface_hub import HfApi
 
         HfApi(token=token).upload_file(
             path_or_fileobj=str(csv_path),
-            path_in_repo=f"results/{csv_path.parent.name}.csv",
+            path_in_repo=f"results/{run_id}/{csv_path.name}",
             repo_id=repo_id,
             repo_type="dataset",
-            commit_message=f"results for {csv_path.parent.name}",
+            commit_message=f"results for {run_id}/{csv_path.stem}",
         )
         return True
     except Exception as e:  # network, auth, missing repo, ...

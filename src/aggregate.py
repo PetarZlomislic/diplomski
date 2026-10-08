@@ -1,6 +1,6 @@
 """Aggregation entrypoint: results dir -> tidy dataframe + degradation-curve plots.
 
-Each run writes its own results.csv (no cross-machine file locking); this merges them.
+Every evaluation writes its own <run dir>/results/<eval_id>.csv (no locking); this merges them.
 """
 import argparse
 from pathlib import Path
@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from src.results import FIELDNAMES  # noqa: E402
+from src.results import FIELDNAMES, RESULTS_DIR  # noqa: E402
 
 # Validated categorical palette (light surface), assigned in fixed order, never cycled.
 SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
@@ -20,9 +20,9 @@ SURFACE, INK, INK_MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 
 def load_results(root: Path) -> pd.DataFrame:
-    files = sorted(root.rglob("results.csv"))
+    files = sorted(p for p in root.rglob("*.csv") if p.parent.name == RESULTS_DIR)
     if not files:
-        raise FileNotFoundError(f"no results.csv under {root}")
+        raise FileNotFoundError(f"no results/*.csv under {root}")
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)[FIELDNAMES]
     # Re-evaluating the same checkpoint supersedes earlier rows instead of double-counting.
     key = ["run_id", "degradation", "severity", "ckpt_kind", "threshold"]
@@ -101,7 +101,8 @@ def aggregate(root: Path, out: Path, metric: str = "f1_macro") -> tuple[pd.DataF
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("root", type=Path, help="directory searched recursively for results.csv")
+    ap.add_argument("root", type=Path,
+                    help="directory searched recursively for <run>/results/*.csv")
     ap.add_argument("--out", type=Path, default=None, help="default: <root>/aggregate")
     ap.add_argument("--metric", default="f1_macro", choices=["f1_macro", "f1_micro", "accuracy"])
     args = ap.parse_args()

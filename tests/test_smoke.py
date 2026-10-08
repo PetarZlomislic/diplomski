@@ -21,7 +21,7 @@ def test_train_smoke_writes_checkpoint(tmp_path: Path) -> None:
     ckpts = list(tmp_path.glob("*/checkpoints/*.ckpt"))
     names = {c.name for c in ckpts}
     assert {"best.ckpt", "last.ckpt"} <= names, names
-    (results,) = tmp_path.glob("*/results.csv")
+    (results,) = tmp_path.glob("*/results/*.csv")
     rows = results.read_text().splitlines()
     assert len(rows) == 2, rows  # header + one clean test-split row
     assert ",none,0.0,0,test,best," in rows[1]
@@ -45,7 +45,8 @@ def test_evaluate_produces_valid_results_row(trained_run) -> None:
     (row,) = _eval(run_dir, "none", [0.0])
     assert row.model == "dummy" and row.split == "test" and row.ckpt_kind == "best"
     assert 0.0 <= row.f1_macro <= 1.0 and row.params > 0
-    header = (run_dir / "results.csv").read_text().splitlines()[0]
+    newest = max((run_dir / "results").glob("*.csv"), key=lambda p: p.stat().st_mtime)
+    header = newest.read_text().splitlines()[0]
     assert header.split(",") == FIELDNAMES
 
 
@@ -140,12 +141,12 @@ def test_push_rows_failure_warns_instead_of_raising(tmp_path, monkeypatch, caplo
     from src.results import push_rows
 
     calls = _failing_upload(monkeypatch)
-    csv = tmp_path / "run" / "results.csv"
-    csv.parent.mkdir()
+    csv = tmp_path / "run" / "results" / "20260101-000000-abcdef.csv"
+    csv.parent.mkdir(parents=True)
     csv.write_text("run_id\nx\n")
     with caplog.at_level("WARNING"):
         assert push_rows(csv, "acme/results", token=None) is False
-    assert len(calls) == 1 and calls[0]["path_in_repo"] == "results/run.csv"
+    assert len(calls) == 1 and calls[0]["path_in_repo"] == "results/run/20260101-000000-abcdef.csv"
     assert "simulated hub outage" in caplog.text
 
 
@@ -180,3 +181,29 @@ def test_no_push_attempted_without_internet(trained_run, monkeypatch) -> None:
     evaluate(str(trained_run("dummy")), "best", cfg.degradation, "none", [0.0],
              cfg.degradation_seed, results_repo="acme/results")
     assert calls == []
+
+
+def test_each_evaluation_writes_its_own_results_file(trained_run) -> None:
+    run_dir = trained_run("dummy")
+    before = set((run_dir / "results").glob("*.csv"))
+    _eval(run_dir, "gaussian_noise", [0.0, 1.0])
+    _eval(run_dir, "gaussian_noise", [0.0, 1.0])
+    new = set((run_dir / "results").glob("*.csv")) - before
+    assert len(new) == 2  # parallel evaluations of one run never share a file
+    assert all(len(p.read_text().splitlines()) == 3 for p in new)  # header + 2 rows
+
+
+def test_clean_eval_falls_back_to_last_when_no_best(tmp_path) -> None:
+    import csv
+
+    import src.train as train_mod
+    from tests.conftest import compose_cfg
+
+    # No validation -> val/f1_macro is never logged -> ModelCheckpoint never writes best.ckpt.
+    cfg = compose_cfg("+experiment=smoke", "+trainer.limit_val_batches=0",
+                      f"output_dir={tmp_path}")
+    run_dir = train_mod.run(cfg, {"model": "dummy"})
+    assert not (run_dir / "checkpoints" / "best.ckpt").exists()
+    (results,) = (run_dir / "results").glob("*.csv")
+    (row,) = list(csv.DictReader(results.open()))
+    assert row["ckpt_kind"] == "last"
