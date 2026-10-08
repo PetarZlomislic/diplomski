@@ -6,6 +6,7 @@ from litdata import StreamingDataLoader, StreamingDataset
 from torch import Tensor
 
 from src.data.base import BaseDataModule
+from src.env import detect
 
 
 def _normalize_uri(uri: str) -> str:
@@ -25,6 +26,9 @@ def _to_tensors(sample: dict[str, Any]) -> dict[str, Any]:
 class StreamingDataModule(BaseDataModule):
     """Streams litdata shards written by src.prepare_data from `<data_uri>/<split>`.
 
+    A relative `data_uri` is resolved against the runtime's data root (see src/env.py), so
+    the same override works locally, on a mounted dataset, or on the Hub.
+
     Nothing is downloaded or copied up front: local shards are read in place, remote ones
     are fetched chunk by chunk into a bounded cache.
     """
@@ -42,7 +46,7 @@ class StreamingDataModule(BaseDataModule):
         seed: int = 0,
     ):
         super().__init__()
-        self.data_uri = _normalize_uri(data_uri)
+        self.data_uri = detect().resolve_data_uri(_normalize_uri(data_uri))
         self.num_classes = num_classes
         self.in_channels = dict(in_channels)
         self.image_size = image_size

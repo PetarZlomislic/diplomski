@@ -18,6 +18,7 @@ results_repo: null           # HF dataset repo ("user/name") for results rows; n
 
 resume_from_checkpoint: null # path to a .ckpt; continues that run in its own dir
 ckpt_interval_min: 30        # wall-clock checkpoint interval (Kaggle has a 9 h hard cap)
+stop_margin_min: 15          # stop this long before the runtime's wall-clock cap, then save
 
 obs:
   heartbeat_s: 30            # TIME interval, not steps

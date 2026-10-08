@@ -94,3 +94,89 @@ def test_resume_from_checkpoint_continues_same_run(tmp_path) -> None:
     assert second == first
     assert len(list(tmp_path.iterdir())) == 1
     assert torch.load(last, weights_only=False)["global_step"] == 2 * steps_one_epoch
+
+
+def test_time_budget_arithmetic() -> None:
+    from src.train import time_budget_s
+
+    assert time_budget_s(None, 100, 900) is None
+    assert time_budget_s(9 * 3600, 600, 900) == 9 * 3600 - 600 - 900
+    assert time_budget_s(3600, 3500, 900) == 60.0  # late runs still get time to checkpoint
+
+
+def test_time_budget_stops_training_and_saves_resumable_checkpoint(tmp_path, monkeypatch) -> None:
+    import json
+
+    import torch
+
+    import src.train as train_mod
+    from tests.conftest import compose_cfg
+
+    monkeypatch.setattr(train_mod, "time_budget_s", lambda *a: 2.0)
+    cfg = compose_cfg("+experiment=smoke", "trainer.max_epochs=100000", f"output_dir={tmp_path}")
+    run_dir = train_mod.run(cfg, {"model": "dummy"})
+    events = [json.loads(x) for x in (run_dir / "run.jsonl").read_text().splitlines()]
+    (stop,) = [e for e in events if e["event"] == "time_budget_stop"]
+    assert stop["epoch"] < 100000 and "resume_from_checkpoint=" in stop["resume"]
+    last = torch.load(run_dir / "checkpoints" / "last.ckpt", weights_only=False)
+    assert last["global_step"] == stop["global_step"]
+    assert "run_end" in [e["event"] for e in events]
+
+
+def _failing_upload(monkeypatch) -> list:
+    import huggingface_hub
+
+    calls: list = []
+
+    def boom(self, **kwargs):
+        calls.append(kwargs)
+        raise ConnectionError("simulated hub outage")
+
+    monkeypatch.setattr(huggingface_hub.HfApi, "upload_file", boom)
+    return calls
+
+
+def test_push_rows_failure_warns_instead_of_raising(tmp_path, monkeypatch, caplog) -> None:
+    from src.results import push_rows
+
+    calls = _failing_upload(monkeypatch)
+    csv = tmp_path / "run" / "results.csv"
+    csv.parent.mkdir()
+    csv.write_text("run_id\nx\n")
+    with caplog.at_level("WARNING"):
+        assert push_rows(csv, "acme/results", token=None) is False
+    assert len(calls) == 1 and calls[0]["path_in_repo"] == "results/run.csv"
+    assert "simulated hub outage" in caplog.text
+
+
+def test_evaluate_survives_failed_push_and_logs_it(trained_run, monkeypatch) -> None:
+    import json
+
+    calls = _failing_upload(monkeypatch)
+    monkeypatch.setenv("RUN_ENV", "local")
+    monkeypatch.setenv("HAS_INTERNET", "1")
+    run_dir = trained_run("dummy")
+    from src.evaluate import evaluate
+    from tests.conftest import compose_cfg
+
+    cfg = compose_cfg("degradation=gaussian_noise")
+    rows = evaluate(str(run_dir), "best", cfg.degradation, "gaussian_noise", [0.0, 1.0],
+                    cfg.degradation_seed, results_repo="acme/results")
+    assert len(rows) == 2 and len(calls) == 1
+    events = [json.loads(x) for x in (run_dir / "run.jsonl").read_text().splitlines()]
+    end = [e for e in events if e["event"] == "run_end"][-1]
+    assert end["results_pushed"] is False
+    assert any(e["event"] == "log" and "simulated hub outage" in e["message"] for e in events)
+
+
+def test_no_push_attempted_without_internet(trained_run, monkeypatch) -> None:
+    calls = _failing_upload(monkeypatch)
+    monkeypatch.setenv("RUN_ENV", "local")
+    monkeypatch.setenv("HAS_INTERNET", "0")
+    from src.evaluate import evaluate
+    from tests.conftest import compose_cfg
+
+    cfg = compose_cfg()
+    evaluate(str(trained_run("dummy")), "best", cfg.degradation, "none", [0.0],
+             cfg.degradation_seed, results_repo="acme/results")
+    assert calls == []

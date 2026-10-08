@@ -35,10 +35,19 @@ if [[ -z "$bucket" ]]; then
 fi
 [[ "$slug" != UNSET_OWNER/* || "$dry_run" == 1 ]] || die "no origin remote; set REPO_SLUG=owner/repo"
 
+case "$timeout" in
+  *d) timeout_s=$(( ${timeout%d} * 86400 )) ;;
+  *h) timeout_s=$(( ${timeout%h} * 3600 )) ;;
+  *m) timeout_s=$(( ${timeout%m} * 60 )) ;;
+  *s) timeout_s=${timeout%s} ;;
+  *) timeout_s=$timeout ;;
+esac
+[[ "$timeout_s" =~ ^[0-9]+$ ]] || die "--timeout must be an integer with optional s/m/h/d suffix"
+
 cmd=(hf jobs uv run
   --flavor "$flavor" --timeout "$timeout" -d
   -s HF_TOKEN -s WANDB_API_KEY
-  -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry"
+  -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry" -e MAX_RUNTIME_S="$timeout_s"
   -v "hf://buckets/$bucket/ckpt:/ckpt"
   "https://raw.githubusercontent.com/$slug/$sha/scripts/hf_entry.py"
   -- "${overrides[@]}")

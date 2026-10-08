@@ -1,6 +1,8 @@
-# Streams shards written by `python -m src.prepare_data`. data_uri may be a local dir,
-# file://..., or a remote URI (hf://datasets/<repo>, s3://...). Set it per run, e.g.
-#   data=streaming data.data_uri=data/prepared/dev
+# Streams shards written by `python -m src.prepare_data`. A relative data_uri resolves
+# against the runtime data root (local: data/, Kaggle: /kaggle/input/, HF Jobs:
+# hf://datasets/); absolute paths, ./paths, file:// and other URIs are used as given. E.g.
+#   data=streaming data.data_uri=prepared/dev           (local -> data/prepared/dev)
+#   data=streaming data.data_uri=<user>/reben-dev       (HF Jobs -> hf://datasets/<user>/reben-dev)
 _target_: src.data.streaming.StreamingDataModule
 data_uri: ???
 num_classes: 19

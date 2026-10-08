@@ -95,3 +95,25 @@ def test_no_module_outside_env_mentions_runtime_specifics() -> None:
         if pattern.search(line)
     ]
     assert not offenders, offenders
+
+
+@pytest.mark.parametrize(
+    ("runtime", "uri", "expected"),
+    [
+        ("local", "prepared/dev", str(Path("data").resolve() / "prepared/dev")),
+        ("kaggle", "reben-dev", str(Path("/kaggle/input").resolve() / "reben-dev")),
+        ("hf_jobs", "user/reben-dev", "hf://datasets/user/reben-dev"),
+        ("hf_jobs", "s3://bucket/shards", "s3://bucket/shards"),
+        ("local", "./here/dev", "./here/dev"),
+    ],
+)
+def test_relative_data_uri_resolves_against_runtime_data_root(
+    monkeypatch: pytest.MonkeyPatch, runtime: str, uri: str, expected: str
+) -> None:
+    monkeypatch.setenv("RUN_ENV", runtime)
+    monkeypatch.setenv("HAS_INTERNET", "1")
+    assert detect().resolve_data_uri(uri) == expected
+
+
+def test_absolute_data_uri_is_unchanged(tmp_path: Path) -> None:
+    assert detect().resolve_data_uri(str(tmp_path)) == str(tmp_path)

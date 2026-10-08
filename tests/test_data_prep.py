@@ -82,3 +82,10 @@ def test_streaming_trains_one_epoch_without_copying(shards: Path, tmp_path: Path
     assert (run_dir / "checkpoints" / "last.ckpt").exists()
     copied = list(cache.rglob("*.bin")) if cache.exists() else []
     assert not copied, f"shards were copied into the cache: {copied[:3]}"
+
+
+def test_streaming_relative_uri_uses_data_root(shards: Path, tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATA_ROOT", str(shards))
+    run_dir = _train_streaming("dev", tmp_path / "runs", tmp_path / "cache")
+    assert (run_dir / "checkpoints" / "last.ckpt").exists()

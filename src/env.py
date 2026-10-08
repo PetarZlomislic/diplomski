@@ -3,6 +3,7 @@
 Detection order: explicit RUN_ENV (set by the submission scripts) -> Kaggle markers -> local.
 Optional overrides: OUTPUT_ROOT, DATA_ROOT, HAS_INTERNET (0/1), MAX_RUNTIME_S.
 """
+import functools
 import os
 import shlex
 import socket
@@ -39,6 +40,16 @@ class Env:
                 pass
         return os.environ.get(name) or None
 
+    def resolve_data_uri(self, uri: str) -> str:
+        """A relative data URI is resolved against this runtime's data root; absolute paths,
+        URIs with a scheme, and ./ or ../ paths (cwd-relative) are returned unchanged."""
+        if "://" in uri or Path(uri).is_absolute() or uri.startswith(("./", "../", ".\\")):
+            return uri
+        root = self.data_root
+        if "://" in root:
+            return f"{root.rstrip('/')}/{uri}"
+        return str(Path(root).resolve() / uri)
+
     def hydra_argv(self, argv: list[str]) -> list[str]:
         """Hydra overrides arrive as CLI args, except on Kaggle (single code file), where the
         submitter puts them in HYDRA_OVERRIDES."""
@@ -55,6 +66,7 @@ def _detect_runtime() -> Runtime:
     return Runtime.LOCAL
 
 
+@functools.lru_cache(maxsize=1)
 def _probe_internet(timeout: float = 2.0) -> bool:
     try:
         socket.create_connection(("huggingface.co", 443), timeout=timeout).close()
