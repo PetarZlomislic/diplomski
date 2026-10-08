@@ -8,6 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_common.sh
+load_env
 
 dry_run=0; allow_dirty=0; entry=train; kernel=${KAGGLE_KERNEL:-}; poll_s=30
 overrides=()

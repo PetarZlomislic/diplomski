@@ -8,6 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_common.sh
+load_env
 
 dry_run=0; allow_dirty=0; flavor=a10g-small; timeout=4h; entry=train
 overrides=()

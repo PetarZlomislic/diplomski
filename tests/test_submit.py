@@ -35,9 +35,15 @@ def repo(tmp_path: Path) -> Path:
     return r
 
 
-def _run(repo: Path, script: str, *args: str) -> subprocess.CompletedProcess:
+def _run(repo: Path, script: str, *args: str,
+         env_overrides: dict[str, str | None] | None = None) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in ("REPO_SLUG", "KAGGLE_KERNEL")}
     env |= {"HF_BUCKET": "acme/ckpts", "KAGGLE_KERNEL": "acme/rob-train"}
+    for k, v in (env_overrides or {}).items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
     return subprocess.run([_bash(), f"scripts/{script}", *args], cwd=repo, env=env,
                           capture_output=True, text=True, timeout=120)
 
@@ -123,3 +129,21 @@ def test_kaggle_dry_run_stamps_kernel_and_overrides_round_trip(repo: Path) -> No
     meta = json.loads((build / "kernel-metadata.json").read_text())
     assert meta["id"] == "acme/rob-train" and meta["kernel_type"] == "script"
     assert meta["enable_gpu"] is True and meta["enable_internet"] is True
+
+
+def test_dotenv_is_loaded_and_shell_env_wins(repo: Path) -> None:
+    (repo / ".env").write_text(
+        "# comment\nHF_BUCKET=\"dotenv/bucket\"\nexport KAGGLE_KERNEL='dotenv/kernel'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    "commit", "-qm", "env", "--allow-empty"], cwd=repo, check=True)
+    unset = {"HF_BUCKET": None, "KAGGLE_KERNEL": None}
+    (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "--allow-dirty", "m=1",
+                               env_overrides=unset).stdout)
+    assert "hf://buckets/dotenv/bucket/ckpt:/ckpt" in cmd
+    kg = _run(repo, "submit_kaggle.sh", "--dry-run", "--allow-dirty", "m=1", env_overrides=unset)
+    assert "# kernel dotenv/kernel " in kg.stdout
+    (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "--allow-dirty", "m=1",
+                               env_overrides={"HF_BUCKET": "shell/bucket"}).stdout)
+    assert "hf://buckets/shell/bucket/ckpt:/ckpt" in cmd
