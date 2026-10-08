@@ -9,6 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_common.sh
 load_env
+# Prefer the project's pinned hf CLI over whatever else is on PATH.
+for d in .venv/Scripts .venv/bin; do [[ -d "$d" ]] && PATH="$PWD/$d:$PATH"; done
 
 dry_run=0; allow_dirty=0; flavor=a10g-small; timeout=4h; entry=train
 overrides=()
