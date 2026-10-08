@@ -90,7 +90,8 @@ def test_evaluate_emits_progress_per_severity(smoke_run: Path) -> None:
     cfg = compose_cfg("degradation=gaussian_noise")
     evaluate(str(smoke_run), "best", cfg.degradation, "gaussian_noise", [0.0, 0.5, 1.0],
              cfg.degradation_seed)
-    progress = [e for e in _events(smoke_run / "run.jsonl") if e["event"] == "eval_progress"]
+    progress = [e for e in _events(smoke_run / "run.jsonl")
+                if e["event"] == "eval_progress" and e["degradation"] == "gaussian_noise"]
     assert [p["severity"] for p in progress] == [0.0, 0.5, 1.0]
     assert all("f1_macro" in p for p in progress)
 

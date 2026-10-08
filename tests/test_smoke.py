@@ -21,6 +21,10 @@ def test_train_smoke_writes_checkpoint(tmp_path: Path) -> None:
     ckpts = list(tmp_path.glob("*/checkpoints/*.ckpt"))
     names = {c.name for c in ckpts}
     assert {"best.ckpt", "last.ckpt"} <= names, names
+    (results,) = tmp_path.glob("*/results.csv")
+    rows = results.read_text().splitlines()
+    assert len(rows) == 2, rows  # header + one clean test-split row
+    assert ",none,0.0,0,test,best," in rows[1]
 
 
 SEVERITIES = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -66,8 +70,9 @@ def test_two_model_sweep_aggregates_to_ten_rows_and_one_curve(tmp_path) -> None:
         _eval(run_dir, "gaussian_noise", SEVERITIES)
         _eval(run_dir, "gaussian_noise", SEVERITIES)  # re-run must not double-count
     df, plots = aggregate(root, tmp_path / "agg")
-    assert len(df) == 10
-    assert df.groupby("model").size().to_dict() == {"dummy": 5, "dummy_wide": 5}
+    sweep = df[df["degradation"] == "gaussian_noise"]
+    assert len(sweep) == 10
+    assert sweep.groupby("model").size().to_dict() == {"dummy": 5, "dummy_wide": 5}
     assert [p.name for p in plots] == ["curve_gaussian_noise_f1_macro.png"]
     assert plots[0].stat().st_size > 0
 

@@ -14,6 +14,7 @@ threshold: 0.5
 
 # Resolved at runtime from src/env.py — do NOT hardcode a path here.
 output_dir: null
+results_repo: null           # HF dataset repo ("user/name") for results rows; null = local only
 
 resume_from_checkpoint: null # path to a .ckpt; continues that run in its own dir
 ckpt_interval_min: 30        # wall-clock checkpoint interval (Kaggle has a 9 h hard cap)

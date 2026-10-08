@@ -26,6 +26,8 @@ class ResultsRow:
 
 
 FIELDNAMES = [f.name for f in fields(ResultsRow)]
+RUN_CONFIG = "run_config.yaml"
+RESULTS_FILE = "results.csv"
 
 
 def append_rows(rows: list[ResultsRow], path: Path) -> None:

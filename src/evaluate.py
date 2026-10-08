@@ -19,10 +19,7 @@ from src.degradations.base import BaseDegradation
 from src.env import detect
 from src.module import LitModule, make_metrics
 from src.obs import failure_fields, run_header, setup_logging
-from src.results import ResultsRow, append_rows, push_rows
-from src.train import RUN_CONFIG
-
-RESULTS_FILE = "results.csv"
+from src.results import RESULTS_FILE, RUN_CONFIG, ResultsRow, append_rows, push_rows
 
 
 def resolve_ckpt(ckpt: str, run_dir: str | None) -> tuple[Path, Path, str]:

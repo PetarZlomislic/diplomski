@@ -16,6 +16,7 @@ from src.callbacks.sysmetrics import SysMetricsCallback
 from src.callbacks.throughput import ThroughputCallback
 from src.env import Env, detect, get_output_root
 from src.module import LitModule
+from src.results import RUN_CONFIG
 from src.obs import (
     config_hash,
     failure_fields,
@@ -26,7 +27,7 @@ from src.obs import (
     setup_logging,
 )
 
-RUN_CONFIG = "run_config.yaml"
+CLEAN = {"_target_": "src.degradations.none.NoDegradation"}
 
 
 def _wandb_logger(cfg: DictConfig, env: Env, run_id: str, output_dir: Path):
@@ -112,6 +113,13 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
              global_step=trainer.global_step, best_ckpt=best_cb.best_model_path or None,
              best_val_f1_macro=float(score) if score is not None else None)
     log.close()
+
+    # One clean (undegraded) test-split row per training run, from the best checkpoint.
+    from src.evaluate import evaluate
+
+    evaluate(str(output_dir), "best", OmegaConf.create(CLEAN), "none", [0.0],
+             cfg.degradation_seed, results_repo=cfg.get("results_repo"),
+             heartbeat_s=cfg.obs.heartbeat_s)
     return output_dir
 
 
