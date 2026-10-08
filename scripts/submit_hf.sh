@@ -47,9 +47,13 @@ case "$timeout" in
 esac
 [[ "$timeout_s" =~ ^[0-9]+$ ]] || die "--timeout must be an integer with optional s/m/h/d suffix"
 
+# hf refuses to forward a secret that is unset locally, so W&B's is optional.
+secrets=(-s HF_TOKEN)
+[[ -n "${WANDB_API_KEY:-}" ]] && secrets+=(-s WANDB_API_KEY)
+
 cmd=(hf jobs uv run
   --flavor "$flavor" --timeout "$timeout" -d
-  -s HF_TOKEN -s WANDB_API_KEY
+  "${secrets[@]}"
   -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry" -e MAX_RUNTIME_S="$timeout_s"
   -v "hf://buckets/$bucket/ckpt:/ckpt"
   "https://raw.githubusercontent.com/$slug/$sha/scripts/hf_entry.py"

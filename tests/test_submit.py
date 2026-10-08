@@ -58,7 +58,8 @@ def _hf_commands(stdout: str) -> list[list[str]]:
 
 
 def test_hf_dry_run_passes_every_override_verbatim(repo: Path) -> None:
-    res = _run(repo, "submit_hf.sh", "--dry-run", *OVERRIDES)
+    res = _run(repo, "submit_hf.sh", "--dry-run", *OVERRIDES,
+               env_overrides={"WANDB_API_KEY": "dummy"})
     assert res.returncode == 0, res.stderr
     (cmd,) = _hf_commands(res.stdout)
     assert cmd[cmd.index("--") + 1:] == OVERRIDES
@@ -147,3 +148,9 @@ def test_dotenv_is_loaded_and_shell_env_wins(repo: Path) -> None:
     (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "--allow-dirty", "m=1",
                                env_overrides={"HF_BUCKET": "shell/bucket"}).stdout)
     assert "hf://buckets/shell/bucket/ckpt:/ckpt" in cmd
+
+
+def test_wandb_secret_forwarded_only_when_set(repo: Path) -> None:
+    (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "m=1",
+                               env_overrides={"WANDB_API_KEY": None}).stdout)
+    assert "WANDB_API_KEY" not in cmd and cmd[cmd.index("-s") + 1] == "HF_TOKEN"
