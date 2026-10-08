@@ -65,7 +65,8 @@ if [[ "$dry_run" == 1 ]]; then
   exit 0
 fi
 
-command -v kaggle >/dev/null || die "kaggle CLI not found (pip install kaggle)"
+command -v kaggle >/dev/null || die "kaggle CLI not found (uv tool install kaggle)"
+export PYTHONUTF8=1  # the Kaggle CLI crashes printing non-ASCII on Windows consoles otherwise
 "${push_cmd[@]}"
 echo "pushed $kernel; polling every ${poll_s}s"
 while true; do
@@ -78,6 +79,8 @@ while true; do
   sleep "$poll_s"
 done
 mkdir -p "$out_dir"
-kaggle kernels output "$kernel" -p "$out_dir"
-echo "outputs: $out_dir"
+kaggle kernels logs "$kernel" > "$out_dir/kernel_log.json" 2>&1 || true
+# `kernels output` can hang when a failed kernel produced no files; bound it.
+timeout 600 kaggle kernels output "$kernel" -p "$out_dir" || echo "warning: output download failed or timed out" >&2
+echo "outputs: $out_dir (execution log: $out_dir/kernel_log.json)"
 [[ "$status" == *COMPLETE* || "$status" == *complete* ]]
