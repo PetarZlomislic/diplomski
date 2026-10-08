@@ -75,6 +75,18 @@ def test_dirty_tree_blocks_and_allow_dirty_bypasses(repo: Path) -> None:
         assert ok.returncode == 0, (script, ok.stderr)
 
 
+@pytest.mark.parametrize("url", [
+    "https://github.com/acme/robustness-eval.git",
+    "https://someone@github.com/acme/robustness-eval.git",
+    "https://github.com/acme/robustness-eval",
+    "ssh://git@github.com/acme/robustness-eval.git",
+])
+def test_repo_slug_parses_every_github_remote_form(repo: Path, url: str) -> None:
+    subprocess.run(["git", "remote", "set-url", "origin", url], cwd=repo, check=True)
+    (cmd,) = _hf_commands(_run(repo, "submit_hf.sh", "--dry-run", "model=dummy").stdout)
+    assert "REPO_SLUG=acme/robustness-eval" in cmd
+
+
 def test_sweep_over_2x2_emits_exactly_4_distinct_commands(repo: Path) -> None:
     res = _run(repo, "sweep_hf.sh", "--dry-run", "model=dummy,dummy_wide", "seed=0,1",
                "severities=[0.0,0.5]")

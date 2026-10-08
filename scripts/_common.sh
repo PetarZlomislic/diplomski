@@ -4,14 +4,14 @@ die() { echo "error: $*" >&2; exit 2; }
 
 repo_root() { git rev-parse --show-toplevel; }
 
-# owner/repo from REPO_SLUG or the origin remote (https or ssh form).
+# owner/repo from REPO_SLUG or the origin remote: https://[user@]github.com/o/r[.git],
+# git@github.com:o/r[.git] or ssh://git@github.com/o/r[.git].
 repo_slug() {
   if [[ -n "${REPO_SLUG:-}" ]]; then echo "$REPO_SLUG"; return; fi
   local url
   url=$(git remote get-url origin 2>/dev/null) || { echo "UNSET_OWNER/UNSET_REPO"; return; }
-  url=${url%.git}
-  url=${url#git@github.com:}
-  url=${url#https://github.com/}
+  url=$(sed -E 's#^(https?://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)##; s#\.git$##; s#/$##' <<<"$url")
+  [[ "$url" =~ ^[^/:@]+/[^/:@]+$ ]] || die "cannot parse owner/repo from origin; set REPO_SLUG=owner/repo"
   echo "$url"
 }
 
