@@ -36,12 +36,16 @@ def _git(*args: str) -> str | None:
 
 
 def git_sha() -> str:
-    return _git("rev-parse", "HEAD") or "unknown"
+    """HEAD of the checkout, else REPO_SHA from a remote bootstrap (code fetched as a
+    tarball has no .git), else "unknown"."""
+    return _git("rev-parse", "HEAD") or os.environ.get("REPO_SHA") or "unknown"
 
 
 def git_dirty() -> bool | None:
     status = _git("status", "--porcelain", "--untracked-files=no")
-    return None if status is None else bool(status)
+    if status is None:
+        return False if os.environ.get("REPO_SHA") else None  # pinned tarball: clean
+    return bool(status)
 
 
 def config_hash(resolved_cfg: dict[str, Any]) -> str:

@@ -104,3 +104,13 @@ def test_wandb_offline_writes_local_dir(tmp_path: Path) -> None:
     assert list((run_dir / "wandb").glob("offline-run-*")), list(run_dir.rglob("*"))[:20]
     names = [e["event"] for e in _events(run_dir / "run.jsonl")]
     assert names[0] == "run_start" and names[-1] == "run_end"
+
+
+def test_git_provenance_falls_back_to_pinned_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.obs as obs
+
+    monkeypatch.setattr(obs, "_git", lambda *a: None)  # tarball checkout: no .git
+    monkeypatch.delenv("REPO_SHA", raising=False)
+    assert obs.git_sha() == "unknown" and obs.git_dirty() is None
+    monkeypatch.setenv("REPO_SHA", "a" * 40)
+    assert obs.git_sha() == "a" * 40 and obs.git_dirty() is False

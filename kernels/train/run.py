@@ -39,7 +39,7 @@ def main() -> int:
     subprocess.run([*uv, "sync", "--frozen", "--extra", "logging"], cwd=root, check=True)
 
     env = os.environ | {"RUN_ENV": "kaggle", "HYDRA_OVERRIDES": HYDRA_OVERRIDES,
-                        "PYTHONUNBUFFERED": "1"}
+                        "REPO_SHA": REPO_SHA, "PYTHONUNBUFFERED": "1"}
     cmd = [*uv, "run", "--frozen", "--extra", "logging", "python", "-m", f"src.{ENTRY}"]
     return subprocess.run(cmd, cwd=root, env=env).returncode
 
