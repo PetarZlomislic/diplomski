@@ -2,7 +2,12 @@
 # Submit one detached HF Job running src.train (or src.evaluate) at the current commit.
 #
 #   ./scripts/submit_hf.sh [--dry-run] [--allow-dirty] [--flavor F] [--timeout T]
-#                          [--entry train|evaluate|sweep_eval|prepare_data] <hydra overrides...>
+#                          [--entry train|evaluate|sweep_eval|prepare_data]
+#                          [--data <owner>/<dataset>]... <hydra overrides...>
+#
+# Hub datasets are mounted read-only at /datasets/<owner>/<dataset> (the HF Jobs data root):
+# one given with --data, and the one named by a relative `data.data_uri=<owner>/<dataset>`.
+# Evaluation jobs read the data_uri from the run config, so pass --data for them.
 #
 # Env: HF_BUCKET (bucket for checkpoints/logs, mounted at /ckpt), HF_TOKEN, WANDB_API_KEY.
 set -euo pipefail
@@ -13,7 +18,7 @@ load_env
 for d in .venv/Scripts .venv/bin; do [[ -d "$d" ]] && PATH="$PWD/$d:$PATH"; done
 
 dry_run=0; allow_dirty=0; flavor=a10g-small; timeout=4h; entry=train
-overrides=()
+overrides=(); datasets=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
@@ -21,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --flavor) flavor=$2; shift ;;
     --timeout) timeout=$2; shift ;;
     --entry) entry=$2; shift ;;
+    --data) datasets+=("$2"); shift ;;
     --) shift; overrides+=("$@"); break ;;
     *) overrides+=("$1") ;;
   esac
@@ -47,6 +53,18 @@ case "$timeout" in
 esac
 [[ "$timeout_s" =~ ^[0-9]+$ ]] || die "--timeout must be an integer with optional s/m/h/d suffix"
 
+for o in "${overrides[@]}"; do
+  if [[ "$o" =~ ^data\.data_uri=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$ ]]; then
+    datasets+=("${BASH_REMATCH[1]}")
+  fi
+done
+mounts=()
+for d in $(printf '%s
+' "${datasets[@]}" | sort -u); do
+  [[ "$d" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "--data must be <owner>/<dataset>, got $d"
+  mounts+=(-v "hf://datasets/$d:/datasets/$d")
+done
+
 # hf refuses to forward a secret that is unset locally, so W&B's is optional.
 secrets=(-s HF_TOKEN)
 [[ -n "${WANDB_API_KEY:-}" ]] && secrets+=(-s WANDB_API_KEY)
@@ -55,7 +73,7 @@ cmd=(hf jobs uv run
   --flavor "$flavor" --timeout "$timeout" -d --json
   "${secrets[@]}"
   -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry" -e MAX_RUNTIME_S="$timeout_s"
-  -v "hf://buckets/$bucket/ckpt:/ckpt"
+  -v "hf://buckets/$bucket/ckpt:/ckpt" "${mounts[@]}"
   "https://raw.githubusercontent.com/$slug/$sha/scripts/hf_entry.py"
   -- "${overrides[@]}")
 

@@ -146,13 +146,13 @@ All 14 bands (12 optical + 2 SAR) are kept in every tier. Output goes to `data/p
 |---|---|
 | local | `data/prepared/dev` |
 | Kaggle | `/kaggle/input/prepared/dev` |
-| HF Jobs | `hf://datasets/prepared/dev` |
+| HF Jobs | `/datasets/prepared/dev` (the Hub dataset `<owner>/<name>` mounted by `submit_hf.sh`) |
 
-Absolute paths, `./paths`, `file://...`, `hf://...` and `s3://...` are used as given. `DATA_ROOT=<root>` overrides the root.
+Absolute paths, `./paths`, `file://...` and `s3://...` are used as given. `DATA_ROOT=<root>` overrides the root. **Do not pass `hf://datasets/...`:** litdata treats any `hf://` input as a Parquet dataset, not as shards. On HF Jobs, use the relative `<owner>/<name>`. `submit_hf.sh` mounts it read-only at `/datasets/<owner>/<name>`; for evaluation jobs, add `--data <owner>/<name>`.
 
 ```bash
 uv run python -m src.train data=streaming data.data_uri=prepared/dev data.image_size=8   # synthetic shards are 8x8
-uv run python -m src.train data=streaming data.data_uri=hf://datasets/<user>/reben-dev
+./scripts/submit_hf.sh data=streaming data.data_uri=<user>/reben-dev       # mounted in the job
 ```
 
 Shards are read in place: local directories are never copied, and remote ones are fetched chunk by chunk into a cache bounded by `data.max_cache_size`.

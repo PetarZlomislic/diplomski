@@ -102,7 +102,7 @@ def test_no_module_outside_env_mentions_runtime_specifics() -> None:
     [
         ("local", "prepared/dev", str(Path("data").resolve() / "prepared/dev")),
         ("kaggle", "reben-dev", str(Path("/kaggle/input").resolve() / "reben-dev")),
-        ("hf_jobs", "user/reben-dev", "hf://datasets/user/reben-dev"),
+        ("hf_jobs", "user/reben-dev", str(Path("/datasets").resolve() / "user/reben-dev")),
         ("hf_jobs", "s3://bucket/shards", "s3://bucket/shards"),
         ("local", "./here/dev", "./here/dev"),
     ],

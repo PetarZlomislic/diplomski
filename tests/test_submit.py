@@ -187,3 +187,18 @@ def test_dotenv_strips_inline_comments(repo: Path) -> None:
     assert "hf://buckets/acme/real/ckpt:/ckpt" in cmd
     kg = _run(repo, "submit_kaggle.sh", "--dry-run", "--allow-dirty", "m=1", env_overrides=unset)
     assert "# kernel acme/k # kept " in kg.stdout
+
+
+def test_relative_data_uri_is_mounted_where_the_runtime_resolves_it(repo: Path) -> None:
+    res = _run(repo, "submit_hf.sh", "--dry-run", "data=streaming",
+               "data.data_uri=acme/reben-sweep")
+    assert res.returncode == 0, res.stderr
+    (cmd,) = _hf_commands(res.stdout)
+    assert "hf://datasets/acme/reben-sweep:/datasets/acme/reben-sweep" in cmd
+    ev = _run(repo, "submit_hf.sh", "--dry-run", "--entry", "sweep_eval", "--data",
+              "acme/reben-sweep", "run_dir=x")
+    (cmd,) = _hf_commands(ev.stdout)
+    assert "hf://datasets/acme/reben-sweep:/datasets/acme/reben-sweep" in cmd
+    plain = _run(repo, "submit_hf.sh", "--dry-run", "model=dummy")
+    (cmd,) = _hf_commands(plain.stdout)
+    assert not any(c.startswith("hf://datasets/") for c in cmd)

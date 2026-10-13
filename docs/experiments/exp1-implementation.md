@@ -67,7 +67,7 @@ Estimated output: dev about 2.5 GB, sweep about 37 GB, full about 250 GB, all pr
 # Stage 1: train 6 arms x 1 seed, then sweep each run under every degradation
 ./scripts/sweep_hf.sh +experiment=exp1_pilot data.data_uri=<user>/reben-sweep \
     model=opt,sar,early,late,gate_global,gate_spatial seed=0
-./scripts/submit_hf.sh --entry sweep_eval run_dir=/ckpt/<run_id> stage=pilot   # per run
+./scripts/submit_hf.sh --entry sweep_eval --data <user>/reben-sweep run_dir=/ckpt/<run_id> stage=pilot
 # (locally: uv run python -m src.sweep_eval run_dir=outputs/<run_id> stage=pilot)
 
 uv run python -m src.preflight <runs dir> --ref opt=<BIFOLD S2> --ref sar=<BIFOLD S1>
@@ -76,7 +76,7 @@ uv run python -m src.analysis <runs dir>      # tables, verdicts, figures -> <di
 # Stage 2, only after preflight prints READY
 ./scripts/sweep_hf.sh +experiment=exp1 data.data_uri=<user>/reben-full \
     model=opt,sar,early,late,gate_global,gate_spatial seed=0,1,2
-./scripts/submit_hf.sh --entry sweep_eval run_dir=/ckpt/<run_id> stage=full
+./scripts/submit_hf.sh --entry sweep_eval --data <user>/reben-full run_dir=/ckpt/<run_id> stage=full
 ```
 
 `src.analysis` writes:
