@@ -183,10 +183,28 @@ def test_streaming_standardises_with_manifest_stats(tmp_path: Path) -> None:
                       f"data.cache_dir={(tmp_path / 'cache').as_posix()}")
     dm = instantiate(cfg.data)
     dm.setup("fit")
-    x = torch.cat([b["optical"] for b in dm.train_dataloader()])
+    raw = next(iter(dm.train_dataloader()))
+    assert raw["optical"].mean() > 500  # workers yield raw values; prepare_batch standardises
+    x = torch.cat([dm.prepare_batch(b)["optical"] for b in dm.train_dataloader()])
     assert abs(x.mean().item()) < 0.05 and abs(x.std().item() - 1) < 0.05
-    t = next(iter(dm.test_dataloader()))
+    t = dm.prepare_batch(next(iter(dm.test_dataloader())))
     assert abs(t["sar_shift_1"].std().item() - 1) < 0.2
+
+
+def test_train_flips_are_per_sample_and_shared_across_modalities() -> None:
+    from src.data.base import BaseDataModule
+
+    dm = BaseDataModule()
+    dm.augment = True
+    torch.manual_seed(0)
+    img = torch.arange(16.0).view(1, 1, 4, 4).repeat(64, 1, 1, 1)
+    out = dm.prepare_batch({"optical": img.repeat(1, 3, 1, 1), "sar": img.clone(),
+                            "label": torch.ones(64, 2, dtype=torch.uint8)}, train=True)
+    assert out["label"].dtype == torch.float32
+    assert torch.equal(out["optical"][:, :1], out["sar"])  # same flip for both modalities
+    flipped = (out["sar"] != img).flatten(1).any(1)
+    assert 0 < flipped.sum() < 64  # per sample, not one coin for the whole batch
+    assert torch.equal(dm.prepare_batch({"sar": img}, train=False)["sar"], img)
 
 
 # ------------------------------------------------------------------ end to end
@@ -260,3 +278,20 @@ def test_sweep_eval_runs_every_degradation_of_the_stage(trained_run) -> None:
     got = load_results(run_dir).groupby("degradation")["severity"].apply(sorted).to_dict()
     for deg, sev in cfg.grids.pilot.items():
         assert got[deg] == [float(s) for s in sev]
+
+
+def test_preflight_identity_compares_prepared_batches() -> None:
+    """With real band stats, s=0 must equal the PREPARED clean batch (not the raw one)."""
+    from src.data.dummy import DummyDataModule
+    from src.preflight import check_identity
+
+    dm = DummyDataModule(num_classes=3, in_channels={"optical": 12, "sar": 2}, image_size=8,
+                         n_samples=20)
+    dm.band_stats = {"optical": {"mean": [5.0] * 12, "std": [2.0] * 12},
+                     "sar": {"mean": [-12.0, -19.0], "std": [5.0, 5.0]}}
+    dm.setup("test")
+    import pandas as pd
+
+    empty = pd.DataFrame(columns=["run_id", "degradation", "severity", "f1_macro"])
+    status, detail = check_identity(dm, ["cloud", "speckle", "temporal"], 2, empty)
+    assert status == "PASS", detail

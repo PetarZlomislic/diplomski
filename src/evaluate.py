@@ -59,11 +59,12 @@ def degraded_batches(
     severity: float,
     degradation_seed: int,
 ) -> Iterator[dict[str, Tensor | None]]:
-    """Test batches with the degradation applied. A fresh generator per severity makes the
-    corruption independent of evaluation order, the model, and the global torch RNG."""
+    """Test batches, prepared (standardised, never augmented) and then degraded. A fresh
+    generator per severity makes the corruption independent of evaluation order, the model,
+    and the global torch RNG."""
     generator = torch.Generator().manual_seed(degradation_seed)
     for batch in datamodule.test_dataloader():
-        yield degradation(batch, severity, generator)
+        yield degradation(datamodule.prepare_batch(batch), severity, generator)
 
 
 def evaluate(
@@ -134,7 +135,7 @@ def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradatio
     degradation = instantiate(degradation_cfg)
     degradation.bind(datamodule)
     n_batches = len(datamodule.test_dataloader())
-    first = next(iter(datamodule.test_dataloader()))
+    first = datamodule.prepare_batch(next(iter(datamodule.test_dataloader())))
     flops = count_flops(module, {k: v.to(device) if isinstance(v, torch.Tensor) else v
                                  for k, v in first.items()})
     modalities = getattr(module.model, "required_modalities", ())

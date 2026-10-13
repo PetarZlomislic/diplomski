@@ -80,7 +80,7 @@ def check_identity(dm, degradations, n_batches: int, df: pd.DataFrame) -> tuple[
     for name in degradations:
         deg = _degradation(name)
         deg.bind(dm)
-        clean = _first(iter(dm.test_dataloader()), n_batches)
+        clean = [dm.prepare_batch(b) for b in _first(iter(dm.test_dataloader()), n_batches)]
         zero = _first(degraded_batches(dm, deg, 0.0, 12345), n_batches)
         if not all(_same(a, b) for a, b in zip(clean, zero, strict=True)):
             bad.append(f"{name}: tensors differ at s=0")
