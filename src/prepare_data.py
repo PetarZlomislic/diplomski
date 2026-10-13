@@ -263,8 +263,20 @@ def push_tier(out_dir: Path, repo_id: str, token: str | None = None) -> None:
 
     api = HfApi(token=token)
     api.create_repo(repo_id, repo_type="dataset", exist_ok=True, private=True)
-    # Resumable, multi-commit upload: a full tier is ~250 GB.
-    api.upload_large_folder(folder_path=str(out_dir), repo_id=repo_id, repo_type="dataset")
+    # One commit per split, then the manifest last: a failure loses at most one split, and
+    # a tier without manifest.json is visibly incomplete.
+    for split_dir in sorted(p for p in out_dir.iterdir() if p.is_dir()):
+        api.upload_folder(folder_path=str(split_dir), path_in_repo=split_dir.name,
+                          repo_id=repo_id, repo_type="dataset",
+                          commit_message=f"shards: {out_dir.name}/{split_dir.name}")
+        _event("split_pushed", repo=repo_id, split=split_dir.name)
+    api.upload_file(path_or_fileobj=str(out_dir / "manifest.json"),
+                    path_in_repo="manifest.json", repo_id=repo_id, repo_type="dataset",
+                    commit_message=f"manifest: {out_dir.name}")
+
+
+def _event(event: str, **fields: Any) -> None:
+    print(json.dumps({"event": event, **fields}), flush=True)
 
 
 def tier_name(fraction: float) -> str:
@@ -307,8 +319,10 @@ def prepare(
                            if by_split["train"] else None),
             "temporal": {"steps": temporal_steps, "neighbour_found": shifts},
         }, indent=2))
+        _event("tier_written", tier=name, sizes=sizes)
         if out_repo:
             push_tier(tier_dir, f"{out_repo}-{name}", token)
+            _event("tier_pushed", tier=name, repo=f"{out_repo}-{name}")
         manifest[name] = sizes
     return manifest
 
@@ -344,6 +358,7 @@ def main() -> None:
 
     records = (synthetic_source(args.synthetic_n, seed=args.seed) if args.source == "synthetic"
                else real_source(args.source, args.work_dir))
+    _event("source_loaded", source=args.source, records=len(records))
     fractions = [args.fraction] if args.fraction is not None else list(TIERS.values())
     manifest = prepare(records, args.out_dir, fractions, args.min_per_class, args.seed,
                        args.out_repo, detect().secret("HF_TOKEN"), args.temporal_steps,

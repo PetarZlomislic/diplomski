@@ -89,3 +89,23 @@ def test_streaming_relative_uri_uses_data_root(shards: Path, tmp_path: Path,
     monkeypatch.setenv("DATA_ROOT", str(shards))
     run_dir = _train_streaming("dev", tmp_path / "runs", tmp_path / "cache")
     assert (run_dir / "checkpoints" / "last.ckpt").exists()
+
+
+def test_push_tier_uses_the_pinned_hub_api(tmp_path: Path, monkeypatch) -> None:
+    """Every HfApi method push_tier calls must exist in the pinned huggingface-hub."""
+    import huggingface_hub
+
+    from src.prepare_data import push_tier
+
+    calls: list[tuple[str, dict]] = []
+    for name in ("create_repo", "upload_folder", "upload_file"):
+        assert hasattr(huggingface_hub.HfApi, name), name
+        monkeypatch.setattr(huggingface_hub.HfApi, name,
+                            lambda self, *a, _n=name, **k: calls.append((_n, k)))
+    for split in ("train", "test"):
+        (tmp_path / split).mkdir()
+    (tmp_path / "manifest.json").write_text("{}")
+    push_tier(tmp_path, "acme/reben-dev")
+    assert [n for n, _ in calls] == ["create_repo", "upload_folder", "upload_folder",
+                                     "upload_file"]
+    assert [k.get("path_in_repo") for n, k in calls[1:]] == ["test", "train", "manifest.json"]
