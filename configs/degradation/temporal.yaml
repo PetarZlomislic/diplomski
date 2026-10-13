@@ -1,0 +1,4 @@
+# SAR paired with a non-corresponding patch; severity = grid steps, e.g. [0,1,2,4,8].
+# Needs test shards prepared with --temporal-steps.
+_target_: src.degradations.temporal.TemporalMisalignment
+modality: sar

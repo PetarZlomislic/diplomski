@@ -3,6 +3,7 @@ defaults:
   - data: dummy
   - degradation: none
   - optim: adamw
+  - sched: null              # null = constant lr; sched=cosine for cosine decay
   - trainer: default
   - _self_
 

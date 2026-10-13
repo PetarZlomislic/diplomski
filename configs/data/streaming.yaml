@@ -15,3 +15,6 @@ num_workers: 0
 cache_dir: null
 max_cache_size: 20GB         # litdata suggests >=25GB; Kaggle only has ~20GB of disk
 seed: 0
+normalize: true              # standardise every band with band_stats
+band_stats: null             # null = read <data_uri>/manifest.json
+augment: false               # random flips on the train split

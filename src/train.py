@@ -102,7 +102,8 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
         L.seed_everything(cfg.seed, workers=True, verbose=False)
         datamodule = instantiate(cfg.data)
         module = LitModule(
-            model_cfg=resolved["model"], optim_cfg=resolved["optim"], threshold=cfg.threshold
+            model_cfg=resolved["model"], optim_cfg=resolved["optim"], threshold=cfg.threshold,
+            sched_cfg=resolved.get("sched"),
         )
         ckpt_dir = output_dir / "checkpoints"
         best_cb = ModelCheckpoint(

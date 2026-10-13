@@ -1,0 +1,28 @@
+# @package _global_
+# Experiment 1, Stage 2 (the reported experiment, pre-analysis §8): 6 arms x 3 seeds,
+# full splits.
+#   ./scripts/sweep_hf.sh +experiment=exp1 model=opt,sar,early,late,gate_global,gate_spatial seed=0,1,2
+# Identical schedule/optimiser/augmentation for every arm (§6): never override per arm.
+defaults:
+  - override /data: streaming
+  - override /sched: cosine
+
+data:
+  data_uri: ???              # the full tier, e.g. <user>/reben-full
+  batch_size: 64
+  num_workers: 4
+  augment: true
+
+model:
+  encoder:
+    width: 32
+    pretrained: null         # shared pretrained checkpoint over all 14 bands, if any
+
+optim:
+  lr: 1e-3
+  weight_decay: 0.01
+
+trainer:
+  max_epochs: 30
+
+degradation_seed: 12345

@@ -1,21 +1,24 @@
 from typing import Any
 
 import lightning as L
-import torch
 from hydra.utils import instantiate
 from torch import Tensor, nn
 from torchmetrics import MetricCollection
 from torchmetrics.classification import MultilabelAccuracy, MultilabelF1Score
 
 
-def make_metrics(num_classes: int, threshold: float) -> MetricCollection:
-    return MetricCollection(
-        {
-            "f1_macro": MultilabelF1Score(num_classes, threshold=threshold, average="macro"),
-            "f1_micro": MultilabelF1Score(num_classes, threshold=threshold, average="micro"),
-            "accuracy": MultilabelAccuracy(num_classes, threshold=threshold),
-        }
-    )
+def make_metrics(num_classes: int, threshold: float, per_class: bool = False) -> MetricCollection:
+    """Scalar metrics; `per_class` adds "f1_per_class", a (num_classes,) vector, which
+    cannot go through `log_dict`, so training never asks for it."""
+    metrics = {
+        "f1_macro": MultilabelF1Score(num_classes, threshold=threshold, average="macro"),
+        "f1_micro": MultilabelF1Score(num_classes, threshold=threshold, average="micro"),
+        "accuracy": MultilabelAccuracy(num_classes, threshold=threshold),
+    }
+    if per_class:
+        metrics["f1_per_class"] = MultilabelF1Score(num_classes, threshold=threshold,
+                                                    average=None)
+    return MetricCollection(metrics)
 
 
 class LitModule(L.LightningModule):
@@ -25,7 +28,8 @@ class LitModule(L.LightningModule):
     in __init__ so a checkpoint's hparams are enough to reconstruct the architecture.
     """
 
-    def __init__(self, model_cfg: dict[str, Any], optim_cfg: dict[str, Any], threshold: float):
+    def __init__(self, model_cfg: dict[str, Any], optim_cfg: dict[str, Any], threshold: float,
+                 sched_cfg: dict[str, Any] | None = None):
         super().__init__()
         self.save_hyperparameters()
         self.model = instantiate(model_cfg)
@@ -64,5 +68,10 @@ class LitModule(L.LightningModule):
         self.log_dict(self.test_metrics.compute())
         self.test_metrics.reset()
 
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        return instantiate(self.hparams.optim_cfg, params=self.parameters())
+    def configure_optimizers(self) -> Any:
+        optimizer = instantiate(self.hparams.optim_cfg, params=self.parameters())
+        if not self.hparams.get("sched_cfg"):
+            return optimizer
+        scheduler = instantiate(self.hparams.sched_cfg, optimizer=optimizer)
+        return {"optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}

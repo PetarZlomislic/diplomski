@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,61 @@ def _to_tensors(sample: dict[str, Any]) -> dict[str, Any]:
     return {k: torch.as_tensor(v) if not isinstance(v, str) else v for k, v in sample.items()}
 
 
+def _stats_key(key: str, stats: dict[str, Any]) -> str | None:
+    """`sar` and `sar_shift_4` both standardise with the `sar` statistics."""
+    if key in stats:
+        return key
+    base = key.split("_shift_")[0]
+    return base if "_shift_" in key and base in stats else None
+
+
+def load_manifest(data_uri: str) -> dict[str, Any]:
+    """`<data_uri>/manifest.json`, written by src.prepare_data. Local paths and hf:// only."""
+    base = data_uri.rstrip("/")
+    if base.startswith("hf://"):
+        from huggingface_hub import HfFileSystem
+
+        with HfFileSystem().open(f"{base[len('hf://'):]}/manifest.json") as f:
+            return json.load(f)
+    if "://" in base:
+        raise ValueError(f"cannot read the manifest from {base}; set data.band_stats instead")
+    return json.loads((Path(base) / "manifest.json").read_text())
+
+
+class _Transform:
+    """Per-sample: to tensors, standardise per band, and (train only) random flips applied
+    identically to every image key. A class, not a closure, so it pickles to workers."""
+
+    def __init__(self, stats: dict[str, dict[str, list[float]]] | None, augment: bool):
+        self.stats = {m: (torch.tensor(s["mean"]).view(-1, 1, 1),
+                          torch.tensor(s["std"]).view(-1, 1, 1))
+                      for m, s in (stats or {}).items()}
+        self.augment = augment
+
+    def __call__(self, sample: dict[str, Any]) -> dict[str, Any]:
+        out = _to_tensors(sample)
+        for k, v in out.items():
+            m = _stats_key(k, self.stats)
+            if m is not None:
+                mean, std = self.stats[m]
+                out[k] = (v.float() - mean) / std
+        if self.augment:
+            flips = [d for d, p in ((-1, torch.rand(())), (-2, torch.rand(()))) if p < 0.5]
+            if flips:
+                out = {k: v.flip(flips) if isinstance(v, torch.Tensor) and v.dim() == 3 else v
+                       for k, v in out.items()}
+        return out
+
+
 class StreamingDataModule(BaseDataModule):
     """Streams litdata shards written by src.prepare_data from `<data_uri>/<split>`.
 
     A relative `data_uri` is resolved against the runtime's data root (see src/env.py), so
     the same override works locally, on a mounted dataset, or on the Hub.
+
+    With `normalize`, every band is standardised with `band_stats` (default: the
+    manifest's, i.e. the tier's train split), so 0 is the training mean. `augment` adds
+    random horizontal/vertical flips to the TRAIN split only.
 
     Nothing is downloaded or copied up front: local shards are read in place, remote ones
     are fetched chunk by chunk into a bounded cache.
@@ -44,6 +95,9 @@ class StreamingDataModule(BaseDataModule):
         cache_dir: str | None = None,
         max_cache_size: str = "20GB",
         seed: int = 0,
+        normalize: bool = True,
+        band_stats: dict[str, dict[str, list[float]]] | None = None,
+        augment: bool = False,
     ):
         super().__init__()
         self.data_uri = detect().resolve_data_uri(_normalize_uri(data_uri))
@@ -56,6 +110,15 @@ class StreamingDataModule(BaseDataModule):
         self.cache_dir = cache_dir
         self.max_cache_size = max_cache_size
         self.seed = seed
+        self.normalize = normalize
+        self.augment = augment
+        self.band_stats: dict[str, dict[str, list[float]]] | None = None
+        if normalize:
+            stats = band_stats or load_manifest(self.data_uri).get("band_stats")
+            if not stats:
+                raise ValueError(f"no band_stats for {self.data_uri}: re-run prepare_data or "
+                                 "set data.band_stats")
+            self.band_stats = {m: dict(v) for m, v in stats.items()}
 
     def _dataset(self, split: str, shuffle: bool) -> StreamingDataset:
         base = self.data_uri.rstrip("/")
@@ -66,7 +129,7 @@ class StreamingDataModule(BaseDataModule):
             max_cache_size=self.max_cache_size,
             shuffle=shuffle,
             seed=self.seed,
-            transform=_to_tensors,
+            transform=_Transform(self.band_stats, self.augment and split == "train"),
         )
 
     def setup(self, stage: str | None = None) -> None:

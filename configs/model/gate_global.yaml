@@ -1,0 +1,11 @@
+# Experiment 1 arm `gate_global`: attention gate, one weight per modality per sample.
+defaults:
+  - encoder: cnn
+  - fusion: gate_global
+  - _self_
+
+_target_: src.models.fusion_net.FusionNet
+num_classes: ${data.num_classes}
+in_channels: ${data.in_channels}
+image_size: ${data.image_size}
+modalities: [optical, sar]

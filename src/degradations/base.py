@@ -12,6 +12,10 @@ class BaseDegradation(ABC):
     severity=0.0 must be an exact identity.
     """
 
+    def bind(self, datamodule) -> None:
+        """Called once with the evaluation datamodule before any batch, for degradations
+        that need dataset facts (e.g. `band_stats` to work in physical units)."""
+
     @abstractmethod
     def __call__(
         self,

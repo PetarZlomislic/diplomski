@@ -2,7 +2,7 @@
 # Submit one detached HF Job running src.train (or src.evaluate) at the current commit.
 #
 #   ./scripts/submit_hf.sh [--dry-run] [--allow-dirty] [--flavor F] [--timeout T]
-#                          [--entry train|evaluate] <hydra overrides...>
+#                          [--entry train|evaluate|sweep_eval|prepare_data] <hydra overrides...>
 #
 # Env: HF_BUCKET (bucket for checkpoints/logs, mounted at /ckpt), HF_TOKEN, WANDB_API_KEY.
 set -euo pipefail
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-[[ "$entry" == train || "$entry" == evaluate ]] || die "--entry must be train or evaluate"
+[[ "$entry" =~ ^(train|evaluate|sweep_eval|prepare_data)$ ]] || die "--entry must be train, evaluate, sweep_eval or prepare_data"
 
 require_clean "$allow_dirty"
 sha=$(git rev-parse HEAD)

@@ -1,0 +1,6 @@
+# Synthetic localised occlusion of the optical image; severity = exact fraction occluded.
+_target_: src.degradations.cloud.CloudOcclusion
+modality: optical
+fill: 0.0                    # training-set band mean (batches are standardised)
+octaves: [2, 4, 8]
+persistence: 0.5

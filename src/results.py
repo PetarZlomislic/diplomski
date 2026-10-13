@@ -23,6 +23,9 @@ class ResultsRow:
     ece: float | None
     params: int
     latency_ms: float | None
+    flops: float | None = None           # forward FLOPs per sample, clean input
+    f1_per_class: str | None = None      # JSON list, one F1 per class
+    modality_weights: str | None = None  # JSON {modality: mean fusion weight}; gates/late only
 
 
 FIELDNAMES = [f.name for f in fields(ResultsRow)]

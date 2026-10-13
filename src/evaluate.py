@@ -1,4 +1,5 @@
 """Evaluation entrypoint: checkpoint + degradation -> results rows (test split)."""
+import json
 import sys
 import time
 from collections.abc import Iterator
@@ -37,6 +38,19 @@ def _sync(device: torch.device) -> None:
     """Wait for queued GPU work so latency measures the forward pass, not the launch."""
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def count_flops(module: torch.nn.Module, batch: dict[str, Tensor | None]) -> float | None:
+    """Forward FLOPs per sample on one batch (torch's FlopCounterMode: matmul/conv only)."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    try:
+        counter = FlopCounterMode(display=False)
+        with counter:
+            logits = module(batch)
+        return counter.get_total_flops() / logits.shape[0]
+    except Exception:  # an op the counter cannot trace must not kill the evaluation
+        return None
 
 
 def degraded_batches(
@@ -118,15 +132,21 @@ def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradatio
     datamodule = instantiate(train_cfg.data)
     datamodule.setup("test")
     degradation = instantiate(degradation_cfg)
+    degradation.bind(datamodule)
     n_batches = len(datamodule.test_dataloader())
+    first = next(iter(datamodule.test_dataloader()))
+    flops = count_flops(module, {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                                 for k, v in first.items()})
+    modalities = getattr(module.model, "required_modalities", ())
     heartbeat.update(phase="eval", step=0, max_steps=n_batches * len(severities),
                      degradation=degradation_name)
     heartbeat.start()
 
     rows = []
     for i, severity in enumerate(severities):
-        metrics = make_metrics(num_classes, threshold).to(device)
+        metrics = make_metrics(num_classes, threshold, per_class=True).to(device)
         elapsed, n = 0.0, 0
+        weight_sum = None
         # Degrade on CPU (the generator lives there), then move to the model's device.
         batches = degraded_batches(datamodule, degradation, severity, degradation_seed)
         for j, batch in enumerate(batches):
@@ -139,8 +159,16 @@ def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradatio
             elapsed += time.perf_counter() - t0
             n += logits.shape[0]
             metrics.update(logits, batch["label"].int())
+            w = getattr(module.model, "gate_weights", None)
+            if w is not None:
+                weight_sum = (w.sum(0) if weight_sum is None else weight_sum + w.sum(0))
             heartbeat.update(step=i * n_batches + j + 1, severity=float(severity))
-        m = {k: float(v) for k, v in metrics.compute().items()}
+        computed = metrics.compute()
+        per_class = [round(float(v), 6) for v in computed.pop("f1_per_class")]
+        m = {k: float(v) for k, v in computed.items()}
+        weights = (json.dumps({mod: round(float(v) / n, 6)
+                               for mod, v in zip(modalities, weight_sum)})
+                   if weight_sum is not None and n else None)
         rows.append(
             ResultsRow(
                 run_id=meta.run_id,
@@ -161,6 +189,9 @@ def _evaluate(meta, train_cfg, ckpt_path, ckpt_kind, degradation_cfg, degradatio
                 ece=None,
                 params=params,
                 latency_ms=1000 * elapsed / n if n else None,
+                flops=flops,
+                f1_per_class=json.dumps(per_class),
+                modality_weights=weights,
             )
         )
         log.emit("eval_progress", degradation=degradation_name, severity=float(severity),

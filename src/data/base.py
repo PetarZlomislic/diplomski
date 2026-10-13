@@ -11,6 +11,12 @@ class BaseDataModule(L.LightningDataModule):
 
     num_classes / in_channels / image_size are CONFIG-VISIBLE: model configs interpolate
     them, so they must be resolvable without instantiating the datamodule.
+
+    `band_stats` ({modality: {"mean": [...], "std": [...]}}, physical units) is what batches
+    were standardised with, or None if they are not standardised. Degradations that act in
+    physical units (e.g. speckle) read it through `BaseDegradation.bind`.
+    Test batches may carry `sar_shift_<k>` keys for the temporal degradation; models ignore
+    keys they do not use.
     """
 
     num_classes: int
@@ -18,3 +24,4 @@ class BaseDataModule(L.LightningDataModule):
     image_size: int
     modalities: tuple[str, ...]
     data_uri: str
+    band_stats: dict[str, dict[str, list[float]]] | None = None

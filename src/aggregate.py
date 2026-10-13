@@ -23,7 +23,8 @@ def load_results(root: Path) -> pd.DataFrame:
     files = sorted(p for p in root.rglob("*.csv") if p.parent.name == RESULTS_DIR)
     if not files:
         raise FileNotFoundError(f"no results/*.csv under {root}")
-    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)[FIELDNAMES]
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    df = df.reindex(columns=FIELDNAMES)  # files from before a column was added: NaN
     # Re-evaluating the same checkpoint supersedes earlier rows instead of double-counting.
     key = ["run_id", "degradation", "severity", "ckpt_kind", "threshold"]
     df = df.sort_values("timestamp").drop_duplicates(key, keep="last")

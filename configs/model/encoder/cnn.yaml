@@ -1,0 +1,10 @@
+# Shared encoder for every Experiment 1 arm. Built over the full band layout and sliced
+# per modality, so all arms start from identical weights (pre-analysis §6).
+# `pretrained`: path to a ConvEncoder state_dict over ALL bands; null = random init from
+# the training seed.
+_target_: src.models.encoders.ConvEncoder
+_partial_: true
+width: 32
+depth: 4
+pretrained: null
+init_seed: null

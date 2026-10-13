@@ -21,6 +21,7 @@ def _deg_batch() -> dict[str, torch.Tensor | None]:
     return {
         "optical": torch.randn(2, 12, 8, 8, generator=g),
         "sar": torch.randn(2, 2, 8, 8, generator=g),
+        "sar_shift_1": torch.randn(2, 2, 8, 8, generator=g),
         "label": torch.ones(2, 3),
     }
 
@@ -39,4 +40,4 @@ def test_degradation_at_severity_one_changes_tensor(make_cfg, deg_name: str) -> 
     deg = instantiate(make_cfg(f"degradation={deg_name}").degradation)
     batch = _deg_batch()
     out = deg(batch, 1.0, torch.Generator().manual_seed(1))
-    assert any(not torch.equal(out[k], batch[k]) for k in ("optical", "sar"))
+    assert any(out[k] is None or not torch.equal(out[k], batch[k]) for k in ("optical", "sar"))

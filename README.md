@@ -38,3 +38,6 @@ in_channels: ${data.in_channels}
 image_size: ${data.image_size}
 ```
 Run: `uv run python -m src.train model=tiny_cnn +experiment=smoke`, or remotely `./scripts/submit_hf.sh model=tiny_cnn` / `./scripts/submit_kaggle.sh model=tiny_cnn`.
+
+## Experiment 1
+Fusion mechanisms under sensor degradation: plan, implementation notes and deviations log in [`docs/experiments/`](docs/experiments/exp1-implementation.md).

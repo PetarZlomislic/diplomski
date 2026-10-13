@@ -1,0 +1,3 @@
+_target_: src.models.fusion.gate.SpatialGateFusion
+_partial_: true
+hidden: 64

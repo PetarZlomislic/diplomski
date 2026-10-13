@@ -1,0 +1,11 @@
+# Experiment 1 arm `opt`: optical-only (S2) baseline.
+defaults:
+  - encoder: cnn
+  - fusion: early
+  - _self_
+
+_target_: src.models.fusion_net.FusionNet
+num_classes: ${data.num_classes}
+in_channels: ${data.in_channels}
+image_size: ${data.image_size}
+modalities: [optical]
