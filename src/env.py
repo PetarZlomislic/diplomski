@@ -80,8 +80,8 @@ def detect() -> Env:
     if runtime is Runtime.KAGGLE:
         output_root, data_root, max_s = KAGGLE_WORKING, "/kaggle/input", KAGGLE_MAX_RUNTIME_S
     elif runtime is Runtime.HF_JOBS:
-        # Hub datasets are MOUNTED here by submit_hf.sh (-v hf://datasets/<repo>:/datasets/<repo>):
-        # litdata treats an hf:// input as Parquet, so it cannot stream shards from the URI.
+        # scripts/hf_entry.py downloads the job's Hub datasets here (DATASETS env) and sets
+        # DATA_ROOT; litdata treats an hf:// input as Parquet, so shards cannot be streamed.
         output_root, data_root, max_s = Path("/ckpt"), "/datasets", None
     else:
         output_root, data_root, max_s = Path("outputs").resolve(), "data", None

@@ -5,9 +5,10 @@
 #                          [--entry train|evaluate|sweep_eval|prepare_data]
 #                          [--data <owner>/<dataset>]... <hydra overrides...>
 #
-# Hub datasets are mounted read-only at /datasets/<owner>/<dataset> (the HF Jobs data root):
-# one given with --data, and the one named by a relative `data.data_uri=<owner>/<dataset>`.
-# Evaluation jobs read the data_uri from the run config, so pass --data for them.
+# Hub datasets are DOWNLOADED to the job's disk at /datasets/<owner>/<dataset> (the HF Jobs
+# data root) before the entrypoint runs: one given with --data, and the one named by a
+# relative `data.data_uri=<owner>/<dataset>`. Evaluation jobs read the data_uri from the run
+# config, so pass --data for them. Mind the flavor's disk (a10g-small: 110 GB).
 #
 # Env: HF_BUCKET (bucket for checkpoints/logs, mounted at /ckpt), HF_TOKEN, WANDB_API_KEY.
 set -euo pipefail
@@ -58,12 +59,14 @@ for o in "${overrides[@]}"; do
     datasets+=("${BASH_REMATCH[1]}")
   fi
 done
-mounts=()
+repos=""
 for d in $(printf '%s
 ' "${datasets[@]}" | sort -u); do
   [[ "$d" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "--data must be <owner>/<dataset>, got $d"
-  mounts+=(-v "hf://datasets/$d:/datasets/$d")
+  repos+="${repos:+ }$d"
 done
+data_env=()
+[[ -n "$repos" ]] && data_env=(-e "DATASETS=$repos")
 
 # hf refuses to forward a secret that is unset locally, so W&B's is optional.
 secrets=(-s HF_TOKEN)
@@ -73,7 +76,7 @@ cmd=(hf jobs uv run
   --flavor "$flavor" --timeout "$timeout" -d --json
   "${secrets[@]}"
   -e RUN_ENV=hf_jobs -e REPO_SLUG="$slug" -e REPO_SHA="$sha" -e ENTRY="$entry" -e MAX_RUNTIME_S="$timeout_s"
-  -v "hf://buckets/$bucket/ckpt:/ckpt" "${mounts[@]}"
+  "${data_env[@]}" -v "hf://buckets/$bucket/ckpt:/ckpt"
   "https://raw.githubusercontent.com/$slug/$sha/scripts/hf_entry.py"
   -- "${overrides[@]}")
 
