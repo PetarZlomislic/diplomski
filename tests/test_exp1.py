@@ -295,3 +295,25 @@ def test_preflight_identity_compares_prepared_batches() -> None:
     empty = pd.DataFrame(columns=["run_id", "degradation", "severity", "f1_macro"])
     status, detail = check_identity(dm, ["cloud", "speckle", "temporal"], 2, empty)
     assert status == "PASS", detail
+
+
+def test_exp1_run_trains_and_sweeps_every_model(tmp_path: Path) -> None:
+    from src.aggregate import load_results
+    from src.exp1_run import main
+
+    status = main(["models=[dummy,dummy_wide]", "seeds=[0]", "stage=pilot",
+                   f"train=[+experiment=smoke,output_dir={tmp_path.as_posix()}]"])
+    assert status == 0
+    df = load_results(tmp_path)
+    assert set(df["model"]) == {"dummy", "dummy_wide"}
+    assert {"none", "cloud", "speckle", "drop_optical", "drop_sar", "temporal"} <= set(
+        df["degradation"])
+
+
+def test_exp1_run_continues_after_a_failed_arm(tmp_path: Path) -> None:
+    from src.exp1_run import main
+
+    status = main(["models=[no_such_model,dummy]", "stage=none",
+                   f"train=[+experiment=smoke,output_dir={tmp_path.as_posix()}]"])
+    assert status == 1
+    assert len(list(tmp_path.glob("*/checkpoints/best.ckpt"))) == 1
