@@ -123,8 +123,10 @@ def table1(df: pd.DataFrame, runs: pd.DataFrame) -> pd.DataFrame:
         rows.append(row)
     t = pd.DataFrame(rows).join(cost, on="model")
     for col in ("AUDC_mean", "AUDC_rel_mean"):
+        # Nullable: AUDC_rel is undefined (NaN) for a config whose clean F1 is 0, and an
+        # undefined score gets no rank instead of crashing the analysis.
         t[f"rank_{col.removesuffix('_mean')}"] = (
-            t.groupby("degradation")[col].rank(ascending=False, method="min").astype(int))
+            t.groupby("degradation")[col].rank(ascending=False, method="min").astype("Int64"))
     return t.sort_values(["degradation", "rank_AUDC_rel"], ignore_index=True)
 
 

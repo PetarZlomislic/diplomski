@@ -216,6 +216,15 @@ The script stamps the commit, `RUN_ENV=kaggle` and your overrides into a copy of
 
 Kaggle sessions have a hard 9 h limit; the time budget (§3) stops cleanly before it. Each push replaces the kernel's previous version, so use a different `--kernel` for parallel runs.
 
+### Cheapest option: `auto`
+
+```bash
+python scripts/submit.py auto --dry-run --timeout 8h +experiment=exp1_pilot data.data_uri=<user>/reben-sweep model=opt
+python scripts/submit.py auto --timeout 8h +experiment=exp1_pilot data.data_uri=<user>/reben-sweep model=opt
+```
+
+`auto` works out what the job needs (GPU unless it is `prepare_data` or a CPU smoke run; `--timeout` hours; disk = datasets + 5 GB; `--[no-]gpu`, `--min-disk`, `--min-ram` override), prices every option live, prints the table, and submits to the cheapest usable one. Kaggle is free and wins whenever the kernel is idle, the job fits its 9 h GPU / 12 h CPU session and ~50 GB scratch disk, and `kaggle quota` still covers `--timeout`; otherwise it is the cheapest single-device HF Jobs flavor with enough GPU, disk and RAM, priced as `$/h x --timeout` (an upper bound: the job stops when training ends). It submits one job; for a whole stage on Kaggle use `--entry exp1_run`.
+
 ## 9. Reading the logs
 
 `run.jsonl` (also printed to stdout) contains one JSON object per line, each with `ts`, `level`, `event` and `run_id`:

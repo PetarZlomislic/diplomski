@@ -10,11 +10,11 @@ Hydra overrides. Kaggle pushes a single code file and has no per-run environment
 scripts/submit.py stamps the settings into STAMPED in a build copy of this file.
 
 Settings: REPO_SLUG (owner/repo), REPO_SHA, ENTRY (train|evaluate|...), DATASETS
-(space-separated Hub dataset repos), optional GITHUB_TOKEN for a private repo, and on Kaggle
-HYDRA_OVERRIDES. Each DATASETS repo is downloaded to the job's own disk at
-<data root>/<owner>/<name> before the entrypoint starts, and DATA_ROOT points there: reading
-shards through a mounted or streamed Hub repo starved the GPU (~45 samples/s). On Kaggle that
-is the scratch disk, not the 20 GB /kaggle/working output area; a private repo there needs a
+(space-separated Hub dataset repos), MIN_FREE_GB (disk they need), optional GITHUB_TOKEN for
+a private repo, and on Kaggle HYDRA_OVERRIDES. Each DATASETS repo is downloaded to the job's
+own disk at <data root>/<owner>/<name> before the entrypoint starts, and DATA_ROOT points
+there: reading shards through a mounted or streamed Hub repo starved the GPU (~45 samples/s).
+On Kaggle that is the scratch disk, not the 20 GB /kaggle/working output area; a private repo there needs a
 Kaggle Secret named HF_TOKEN attached to the kernel.
 
 The project runs in its own uv venv, never on top of preinstalled packages (Kaggle's include
@@ -32,7 +32,6 @@ import urllib.request
 from pathlib import Path
 
 STAMPED: dict[str, str] = {}  # filled in by scripts/submit.py for Kaggle
-MIN_FREE_GB = 50  # the pilot tier is 41.5 GB
 KAGGLE = Path("/kaggle")
 
 
@@ -74,9 +73,12 @@ def download(uv: list[str], root: Path, base: Path, repos: list[str]) -> Path:
         base.mkdir(parents=True, exist_ok=True)
     except PermissionError:
         base = Path(tempfile.mkdtemp(prefix="datasets-"))
+    # MIN_FREE_GB: set by `submit.py auto` from the datasets' size; Kaggle's default covers
+    # the 41.5 GB pilot tier.
+    need = float(setting("MIN_FREE_GB", "50" if STAMPED else "0"))
     free = shutil.disk_usage(base).free / 1e9
-    if free < MIN_FREE_GB:
-        raise SystemExit(f"only {free:.0f} GB free at {base}; need >= {MIN_FREE_GB} GB")
+    if free < need:
+        raise SystemExit(f"only {free:.0f} GB free at {base}; need >= {need:.0f} GB")
     env = dict(os.environ)
     if token := hf_token():
         env["HF_TOKEN"] = token

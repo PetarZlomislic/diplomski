@@ -127,3 +127,14 @@ def test_analyse_writes_tables_and_figures(tmp_path: Path) -> None:
     assert set(t1["degradation"]) == {"none", *GRIDS}
     assert (t1["n_seeds"] == 3).all()
     assert "HARD STOP" not in files["summary"].read_text()
+
+
+def test_config_with_zero_clean_f1_gets_no_rank_instead_of_crashing() -> None:
+    from src.analysis import table1
+
+    rows = [replace(r, f1_macro=0.0) if r.model == "sar" else r for r in _rows()]
+    df = pd.DataFrame([r.__dict__ for r in rows])
+    t = table1(df, _runs(rows))
+    cloud = t[t["degradation"] == "cloud"].set_index("model")
+    assert pd.isna(cloud.loc["sar", "rank_AUDC_rel"])  # retention 0/0 is undefined
+    assert cloud.drop("sar")["rank_AUDC_rel"].notna().all()

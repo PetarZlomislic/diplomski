@@ -4,7 +4,16 @@
                               [--entry E] [--data owner/dataset]... [--sweep] <overrides...>
   python scripts/submit.py kaggle [--dry-run] [--allow-dirty] [--entry E] [--kernel user/slug]
                                   [--data owner/dataset]... <overrides...>
+  python scripts/submit.py auto [--dry-run] [--allow-dirty] [--timeout T] [--entry E]
+                                [--data owner/dataset]... [--[no-]gpu] [--min-disk GB]
+                                <overrides...>
   python scripts/submit.py watch [<sweep.tsv> | <owner>/<job_id>...] [--once]
+
+auto    pick the cheapest option that can run this job right now and submit it there:
+        Kaggle (free) if the kernel is idle, the job fits its 9 h GPU / 12 h CPU session and
+        disk, and the weekly GPU quota (`kaggle quota`) covers --timeout; otherwise the HF
+        Jobs flavor with the lowest live price x --timeout that has the GPU, disk (datasets
+        + 5 GB) and RAM it needs. Prints every option with its cost or why it is out.
 
 hf      one detached HF Job (scripts/bootstrap.py). With --sweep, one job per combination of
         comma-separated override values (model=a,b seed=0,1 -> 4 jobs; commas inside [...]
@@ -123,6 +132,17 @@ def expand(overrides: list[str]) -> list[list[str]]:
     return [list(c) for c in itertools.product(*axes)]
 
 
+def default_timeout(a: argparse.Namespace) -> str:
+    return a.timeout or ("24h" if a.entry == "prepare_data" else "4h")
+
+
+def seconds(timeout: str) -> int:
+    m = re.fullmatch(r"(\d+)([dhms]?)", timeout)
+    if not m:
+        die("--timeout must be an integer with optional s/m/h/d suffix")
+    return int(m[1]) * UNITS.get(m[2], 1)
+
+
 # ---------------------------------------------------------------- HF Jobs
 
 def submit_hf(a: argparse.Namespace, overrides: list[str]) -> str | None:
@@ -130,21 +150,18 @@ def submit_hf(a: argparse.Namespace, overrides: list[str]) -> str | None:
     bucket = os.environ.get("HF_BUCKET") or ("<HF_BUCKET>" if a.dry_run else None)
     if not bucket:
         die("HF_BUCKET is not set (e.g. HF_BUCKET=<user>/<bucket> in .env)")
-    prep = a.entry == "prepare_data"
-    flavor = a.flavor or ("cpu-xl" if prep else "a10g-small")
-    timeout = a.timeout or ("24h" if prep else "4h")
-    m = re.fullmatch(r"(\d+)([dhms]?)", timeout)
-    if not m:
-        die("--timeout must be an integer with optional s/m/h/d suffix")
-    timeout_s = int(m[1]) * UNITS.get(m[2], 1)
+    flavor = a.flavor or ("cpu-xl" if a.entry == "prepare_data" else "a10g-small")
+    timeout = default_timeout(a)
     secrets = ["-s", "HF_TOKEN"]
     if os.environ.get("WANDB_API_KEY"):  # hf refuses to forward a secret that is unset
         secrets += ["-s", "WANDB_API_KEY"]
     data = datasets(overrides, a.data)
     cmd = ["hf", "jobs", "uv", "run", "--flavor", flavor, "--timeout", timeout, "-d", "--json",
            *secrets, "-e", "RUN_ENV=hf_jobs", "-e", f"REPO_SLUG={slug}", "-e", f"REPO_SHA={sha}",
-           "-e", f"ENTRY={a.entry}", "-e", f"MAX_RUNTIME_S={timeout_s}",
-           *(["-e", f"DATASETS={data}"] if data else []), "-v", f"hf://buckets/{bucket}/ckpt:/ckpt",
+           "-e", f"ENTRY={a.entry}", "-e", f"MAX_RUNTIME_S={seconds(timeout)}",
+           *(["-e", f"DATASETS={data}"] if data else []),
+           *(["-e", f"MIN_FREE_GB={a.min_free_gb}"] if getattr(a, "min_free_gb", None) else []),
+           "-v", f"hf://buckets/{bucket}/ckpt:/ckpt",
            f"https://raw.githubusercontent.com/{slug}/{sha}/scripts/bootstrap.py", "--", *overrides]
     if a.dry_run:
         print(shlex.join(cmd))
@@ -188,7 +205,8 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
         kernel = f"<KAGGLE_USER>/robustness-eval-{a.entry}"
     stamp = {"REPO_SLUG": slug, "REPO_SHA": sha, "ENTRY": a.entry,
              "HYDRA_OVERRIDES": shlex.join(overrides),  # split again by src/env.py
-             "DATASETS": datasets(overrides, a.data)}
+             "DATASETS": datasets(overrides, a.data),
+             "MIN_FREE_GB": str(getattr(a, "min_free_gb", None) or "")}
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", kernel)
     build = ROOT / "outputs" / "kaggle_build" / safe
     build.mkdir(parents=True, exist_ok=True)
@@ -198,7 +216,8 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
                                   encoding="utf-8")
     meta = {"id": kernel, "title": kernel.split("/")[-1], "code_file": "run.py",
             "language": "python", "kernel_type": "script", "is_private": True,
-            "enable_gpu": True, "enable_internet": True, "dataset_sources": [],
+            "enable_gpu": getattr(a, "gpu", None) is not False, "enable_internet": True,
+            "dataset_sources": [],
             "competition_sources": [], "kernel_sources": [], "model_sources": []}
     (build / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     out_dir = ROOT / "outputs" / "kaggle" / safe / sha
@@ -232,6 +251,135 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
         print("warning: output download timed out", file=sys.stderr)
     print(f"outputs: {out_dir} (execution log: {out_dir / 'kernel_log.json'})")
     return 0 if re.search("complete", status, re.IGNORECASE) else 1
+
+
+# ---------------------------------------------------------------- auto: cheapest usable option
+
+KAGGLE_GPU_H, KAGGLE_CPU_H = 9, 12  # Kaggle session caps
+KAGGLE_DISK_GB = 50  # scratch space the bootstrap has been seen to get (fits the pilot tier)
+JOB_OVERHEAD_GB = 5  # repo, uv env and caches next to the downloaded datasets
+
+
+@dataclass
+class Option:
+    name: str  # "kaggle" or an HF Jobs flavor
+    usd: float | None  # estimated cost of the whole --timeout; None = unusable right now
+    note: str  # spec, or why it cannot be used
+
+
+@dataclass
+class Needs:
+    gpu: bool
+    hours: float
+    disk_gb: float
+    ram_gb: float
+
+
+def needs(a: argparse.Namespace, overrides: list[str], data_gb: float) -> Needs:
+    """What the job needs. GPU unless it is data preparation or explicitly CPU (smoke)."""
+    cpu_only = a.entry == "prepare_data" or any(
+        o in ("trainer.accelerator=cpu", "+experiment=smoke") for o in overrides)
+    prep = a.entry == "prepare_data"  # the reBEN LMDB (155 GB) + three tiers (~290 GB)
+    return Needs(gpu=a.gpu if a.gpu is not None else not cpu_only,
+                 hours=seconds(default_timeout(a)) / 3600,
+                 disk_gb=a.min_disk or (500 if prep else data_gb + JOB_OVERHEAD_GB),
+                 ram_gb=a.min_ram or (100 if prep else 0))
+
+
+def _gb(spec: str | None) -> float:
+    m = re.match(r"([\d.]+)\s*([GT])B", spec or "")
+    return float(m[1]) * (1000 if m[2] == "T" else 1) if m else 0.0
+
+
+def kaggle_option(a: argparse.Namespace, n: Needs) -> Option:
+    def no(why: str) -> Option:
+        return Option("kaggle", None, why)
+
+    if a.entry == "prepare_data":
+        return no("data preparation needs a big CPU machine")
+    if not shutil.which("kaggle"):
+        return no("kaggle CLI not found")
+    kernel = a.kernel or os.environ.get("KAGGLE_KERNEL")
+    if not kernel:
+        return no("KAGGLE_KERNEL not set")
+    cap = KAGGLE_GPU_H if n.gpu else KAGGLE_CPU_H
+    if n.hours > cap:
+        return no(f"timeout {n.hours:g} h > {cap} h session cap")
+    if n.disk_gb > KAGGLE_DISK_GB:
+        return no(f"needs {n.disk_gb:.0f} GB disk > {KAGGLE_DISK_GB} GB")
+    env = os.environ | {"PYTHONUTF8": "1"}
+    status = subprocess.run(["kaggle", "kernels", "status", kernel], capture_output=True,
+                            text=True, env=env).stdout
+    if re.search(r"running|queued", status, re.IGNORECASE):
+        return no(f"{kernel} is still running (a push would replace it)")
+    if n.gpu:
+        res = subprocess.run(["kaggle", "quota", "--format", "json"], capture_output=True,
+                             text=True, env=env)
+        try:
+            gpu = next(q for q in json.loads(res.stdout) if q["resource"] == "GPU")
+        except (ValueError, StopIteration):
+            return no("cannot read the GPU quota (`kaggle quota`)")
+        left = float(gpu["remaining"].rstrip("h"))
+        if left < n.hours:
+            return no(f"GPU quota {left:g} h left < {n.hours:g} h (refills {gpu['refreshAt']})")
+        return Option("kaggle", 0.0, f"free, T4/P100, GPU quota {left:g} h left")
+    return Option("kaggle", 0.0, "free, CPU session")
+
+
+def hf_options(api, n: Needs) -> list[Option]:
+    """Every single-device HF Jobs flavor, priced live for the whole timeout."""
+    me = api.whoami()
+    blocked = None
+    if not os.environ.get("HF_BUCKET"):
+        blocked = "HF_BUCKET not set"
+    elif not (me.get("isPro") or me.get("canPay") or me.get("orgs")):
+        blocked = "account cannot run Jobs (needs PRO or billing)"
+    out = []
+    for h in api.list_jobs_hardware():
+        acc = h.accelerator
+        if (acc is not None and int(acc.quantity) > 1) or (n.gpu and acc is None):
+            continue  # training uses one device; CPU flavors cannot run a GPU job
+        price = h.unit_cost_usd * 60
+        why = blocked
+        if not why and _gb(h.ephemeral_storage) < n.disk_gb:
+            why = f"{h.ephemeral_storage} disk < {n.disk_gb:.0f} GB needed"
+        if not why and _gb(h.ram) < n.ram_gb:
+            why = f"{h.ram} RAM < {n.ram_gb:.0f} GB needed"
+        spec = (f"{price:.2f} $/h, {acc.model if acc else 'CPU'}, {h.ram} RAM, "
+                f"{h.ephemeral_storage} disk")
+        out.append(Option(h.name, None if why else price * n.hours, why or spec))
+    return out
+
+
+def auto(a: argparse.Namespace, overrides: list[str]) -> int:
+    """Submit to the cheapest option usable right now (Kaggle when its quota allows: free)."""
+    if a.sweep:
+        die("auto submits one job; for a whole stage on Kaggle use --entry exp1_run")
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    repos = datasets(overrides, a.data).split()
+    data_gb = sum((s.size or 0) for r in repos
+                  for s in api.dataset_info(r, files_metadata=True).siblings) / 1e9
+    n = needs(a, overrides, data_gb)
+    options = [kaggle_option(a, n), *hf_options(api, n)]
+    usable = sorted((o for o in options if o.usd is not None), key=lambda o: o.usd)
+    print(f"job needs: {'GPU' if n.gpu else 'CPU'}, {n.hours:g} h, {n.disk_gb:.0f} GB disk"
+          + (f", {n.ram_gb:.0f} GB RAM" if n.ram_gb else "")
+          + (f" (datasets {data_gb:.1f} GB)" if repos else ""))
+    for o in usable + [o for o in options if o.usd is None]:
+        cost = "  n/a  " if o.usd is None else f"${o.usd:6.2f}"
+        print(f"  {'->' if usable and o is usable[0] else '  '} {o.name:<16}{cost}  {o.note}")
+    if not usable:
+        die("nothing can run this job right now")
+    best = usable[0]
+    a.min_free_gb = round(n.disk_gb) if repos else None
+    a.gpu = n.gpu
+    if best.name == "kaggle":
+        return submit_kaggle(a, overrides)
+    a.flavor = best.name
+    submit_hf(a, overrides)
+    return 0
 
 
 # ---------------------------------------------------------------- watch
@@ -412,18 +560,24 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--once", action="store_true")
         watch(ap.parse_args(argv[1:]))
         return 0
-    if command not in ("hf", "kaggle"):
-        ap.error("first argument must be hf, kaggle or watch")
+    if command not in ("hf", "kaggle", "auto"):
+        ap.error("first argument must be hf, kaggle, auto or watch")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-dirty", action="store_true")
     ap.add_argument("--entry", default="train", choices=ENTRIES)
     ap.add_argument("--data", action="append", default=[], metavar="OWNER/DATASET")
-    if command == "hf":
-        ap.add_argument("--flavor")
+    if command != "hf":
+        ap.add_argument("--kernel")
+        ap.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=None,
+                        help="Kaggle: GPU session (default on); auto: default from the job")
+    if command != "kaggle":
         ap.add_argument("--timeout")
         ap.add_argument("--sweep", action="store_true")
-    else:
-        ap.add_argument("--kernel")
+    if command == "hf":
+        ap.add_argument("--flavor")
+    if command == "auto":
+        ap.add_argument("--min-disk", type=float, help="GB; default: datasets + 5")
+        ap.add_argument("--min-ram", type=float, help="GB; default: 100 for prepare_data")
     rest = argv[1:]
     split = rest.index("--") if "--" in rest else len(rest)  # after --: overrides verbatim
     a, overrides = ap.parse_known_args(rest[:split])
@@ -432,6 +586,8 @@ def main(argv: list[str]) -> int:
     overrides += rest[split + 1:]
     if command == "kaggle":
         return submit_kaggle(a, overrides)
+    if command == "auto":
+        return auto(a, overrides)
     (sweep_hf if a.sweep else submit_hf)(a, overrides)
     return 0
 

@@ -212,3 +212,78 @@ def test_jobs_from_sweep_tsv(tmp_path: Path) -> None:
     tsv = tmp_path / "s.tsv"
     tsv.write_text("job_id\toverrides\no/1\t+experiment=x model=late seed=2\n")
     assert _load_submit().jobs_from_args([str(tsv)]) == [("o/1", "late s2")]
+
+
+# ---------------------------------------------------------------- auto
+
+def _hw(name, usd_h, disk, ram="30 GB", gpu=None):
+    acc = types.SimpleNamespace(model=gpu, quantity="1") if gpu else None
+    return types.SimpleNamespace(name=name, unit_cost_usd=usd_h / 60, ephemeral_storage=disk,
+                                 ram=ram, accelerator=acc)
+
+
+class _FakeHub:
+    def __init__(self, *a, **k):
+        pass
+
+    def whoami(self):
+        return {"name": "acme", "isPro": True}
+
+    def list_jobs_hardware(self):
+        return [_hw("cpu-basic", 0.01, "50 GB"), _hw("t4-small", 0.4, "50 GB", gpu="T4"),
+                _hw("a10g-small", 1.0, "110 GB", gpu="A10G"),
+                _hw("cpu-xl", 1.0, "1000 GB", "124 GB")]
+
+    def dataset_info(self, repo, files_metadata):
+        return types.SimpleNamespace(siblings=[types.SimpleNamespace(size=60e9)])
+
+
+@pytest.fixture
+def fake_cloud(submit, monkeypatch):
+    """Kaggle with `quota` GPU hours left and an idle kernel; a fixed HF hardware list."""
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHub)
+    monkeypatch.setattr(submit.mod.shutil, "which", lambda name, path=None: f"/bin/{name}")
+    real_run, state = subprocess.run, {"quota": "30.00h"}
+
+    def fake_run(cmd, **kw):
+        if cmd[:2] == ["kaggle", "quota"]:
+            out = json.dumps([{"resource": "GPU", "remaining": state["quota"],
+                               "refreshAt": "2026-10-24T00:00:00"}])
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        if cmd[:3] == ["kaggle", "kernels", "status"]:
+            return subprocess.CompletedProcess(cmd, 0, 'has status "COMPLETE"', "")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(submit.mod.subprocess, "run", fake_run)
+    return state
+
+
+def test_auto_picks_free_kaggle_when_quota_covers_the_job(submit, fake_cloud) -> None:
+    out = submit("auto", "--dry-run", "--timeout", "8h", "model=opt")
+    assert "-> kaggle" in out and "kaggle kernels push" in out and "hf jobs" not in out
+
+
+def test_auto_falls_back_to_the_cheapest_hf_flavor_that_fits(submit, fake_cloud) -> None:
+    fake_cloud["quota"] = "2.00h"
+    out = submit("auto", "--dry-run", "--timeout", "8h", "model=opt")
+    assert "GPU quota 2 h left < 8 h" in out
+    (cmd,) = _hf_commands(out)
+    assert _has(cmd, "--flavor", "t4-small") and not any(c.startswith("DATASETS=") for c in cmd)
+    # 60 GB of data: neither Kaggle nor t4-small (50 GB disk) fits; a10g-small does.
+    out = submit("auto", "--dry-run", "--timeout", "4h", "data.data_uri=acme/big")
+    (cmd,) = _hf_commands(out)
+    assert _has(cmd, "--flavor", "a10g-small") and _has(cmd, "-e", "MIN_FREE_GB=65")
+    assert "50 GB disk < 65 GB needed" in out
+
+
+def test_auto_runs_cpu_jobs_on_cpu(submit, fake_cloud, repo: Path) -> None:
+    out = submit("auto", "--dry-run", "--timeout", "30m", "+experiment=smoke")
+    assert "free, CPU session" in out
+    meta = json.loads((repo / "outputs" / "kaggle_build" / "acme_rob-train"
+                       / "kernel-metadata.json").read_text())
+    assert meta["enable_gpu"] is False  # a CPU session spends no GPU quota
+    (cmd,) = _hf_commands(submit("auto", "--dry-run", "--entry", "prepare_data", "--",
+                                 "--source", "reben"))
+    assert _has(cmd, "--flavor", "cpu-xl")  # 500 GB disk, 100 GB RAM
