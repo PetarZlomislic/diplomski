@@ -16,7 +16,7 @@ train split), which the streaming datamodule standardises with.
 
 Test shards additionally carry `sar_shift_<k>` for each `--temporal-steps` k: the SAR of
 the patch k grid cells away in the same tile, looked up in the FULL source (see
-src/degradations/temporal.py).
+src/degradations.py:TemporalMisalignment).
 
 reBEN (BigEarthNet v2.0) source: the LMDB published by the reBEN authors on the Hub
 (hackelle/BigEarthNetV2-LMDB): one SafeTensors record per patch, keyed by the S2 `patch_id`

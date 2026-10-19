@@ -6,8 +6,8 @@
 `aggregate`: every <run>/results/*.csv merged into results_all.csv, plus a curve per
 degradation (mean over seeds, min-max band).
 
-`exp1` (docs/experiments/exp1-preanalysis.md §3-§5, §9): results dir -> Table 1 (clean, AUDC, AUDC_rel, cost), Table 2 (hypothesis verdicts),
-ordering disagreements, Figures 1-3.
+`exp1` (docs/experiments/exp1-preanalysis.md §3-§5, §9): results dir -> Table 1 (clean,
+AUDC, AUDC_rel, cost), Table 2 (hypothesis verdicts), ordering disagreements, Figures 1-3.
 
 Conventions, fixed before any result (see the plan's deviations log):
   * F1(0) for every degradation is the run's clean `none` row; a sweep need not include 0.
@@ -326,7 +326,7 @@ def _style(ax) -> None:
 
 
 def plot_panels(cv: pd.DataFrame, col: str, ylabel: str, title: str, path: Path,
-                colors: dict[str, str]) -> None:
+                colors: dict[str, str], ylim: tuple[float, float] | None = None) -> None:
     """One panel per degradation, one line per config: seed mean, seed min-max band."""
     degs = [d for d in DEGRADATIONS if d in set(cv["degradation"])] + sorted(
         set(cv["degradation"]) - set(DEGRADATIONS))
@@ -345,6 +345,8 @@ def plot_panels(cv: pd.DataFrame, col: str, ylabel: str, title: str, path: Path,
                     markersize=5, markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=3,
                     clip_on=False, label=model)
             ends.append([g["mean"].iloc[-1], model, g["severity"].iloc[-1]])
+        if ylim:
+            ax.set_ylim(*ylim)
         lo, hi = ax.get_ylim()
         for y, model, x in _spread_labels(ends, min_gap=(hi - lo) * 0.06):
             ax.annotate(model, (x, y), xytext=(6, 0), textcoords="offset points",
@@ -438,8 +440,8 @@ def aggregate(root: Path, out: Path, metric: str = METRIC) -> tuple[pd.DataFrame
     plots = []
     for deg in sorted(set(df["degradation"]) - {"none"}):
         plots.append(out / f"curve_{deg}_{metric}.png")
-        plot_panels(df[df["degradation"] == deg], metric, metric, f"{metric} under {deg}",
-                    plots[-1], colors)
+        plot_panels(df[df["degradation"] == deg], metric, metric, f"{metric} by severity",
+                    plots[-1], colors, ylim=(0, 1))
     return df, plots
 
 

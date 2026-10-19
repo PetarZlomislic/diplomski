@@ -8,16 +8,15 @@ Multimodal degradation-robustness experiments: a model, dataset or degradation i
 ```bash
 uv run python -m src.train +experiment=smoke      # -> outputs/<run_id>/{checkpoints,run.jsonl}
 uv run python -m src.evaluate run_dir=outputs/<run_id> degradation=gaussian_noise
-uv run python -m src.aggregate outputs            # merged CSV + degradation curves
+uv run python -m src.analysis aggregate outputs   # merged CSV + degradation curves
 ```
-Every evaluation writes its own `outputs/<run_id>/results/<eval_id>.csv`; `aggregate` merges them.
+Every evaluation writes its own `outputs/<run_id>/results/<eval_id>.csv`; `src.analysis aggregate` merges them.
 
-## Add a model: `src/models/tiny_cnn.py`
+## Add a model: `src/tiny_cnn.py`
 ```python
 from torch import Tensor, nn
-from src.models.base import BaseModel
 
-class TinyCNN(BaseModel):
+class TinyCNN(nn.Module):
     def __init__(self, num_classes: int, in_channels: dict[str, int], image_size: int, width: int = 16):
         super().__init__()
         self.required_modalities, self.num_classes = ("optical",), num_classes
@@ -32,12 +31,12 @@ class TinyCNN(BaseModel):
 ```
 and `configs/model/tiny_cnn.yaml`:
 ```yaml
-_target_: src.models.tiny_cnn.TinyCNN
+_target_: src.tiny_cnn.TinyCNN
 num_classes: ${data.num_classes}
 in_channels: ${data.in_channels}
 image_size: ${data.image_size}
 ```
-Run: `uv run python -m src.train model=tiny_cnn +experiment=smoke`, or remotely `./scripts/submit_hf.sh model=tiny_cnn` / `./scripts/submit_kaggle.sh model=tiny_cnn`.
+Run: `uv run python -m src.train model=tiny_cnn +experiment=smoke`, or remotely `python scripts/submit.py hf model=tiny_cnn` / `python scripts/submit.py kaggle model=tiny_cnn`.
 
 ## Experiment 1
 Fusion mechanisms under sensor degradation: plan, implementation notes and deviations log in [`docs/experiments/`](docs/experiments/exp1-implementation.md).

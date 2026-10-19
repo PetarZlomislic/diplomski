@@ -6,7 +6,7 @@ How [`exp1-preanalysis.md`](exp1-preanalysis.md) maps to code, which unstated de
 
 | # | What | Status |
 |---|---|---|
-| 1 | **reBEN data.** | Loader done (`src/data/reben.py`); tiers not yet built. It reads the [LMDB published by the reBEN authors](https://huggingface.co/datasets/hackelle/BigEarthNetV2-LMDB) (S1 and S2 already paired, keyed by patch name; same content as [Zenodo record 10891137](https://zenodo.org/records/10891137), v2.0.0). Uses the official `metadata.parquet`: 480,038 patches (237,871 train / 122,342 val / 119,825 test), snow/cloud/shadow already excluded. Preparation runs **only on an HF Job** (`scripts/prepare_hf.sh`), never locally; see "Building the data" below. |
+| 1 | **reBEN data.** | Loader done (`src/prepare_data.py`); tiers not yet built. It reads the [LMDB published by the reBEN authors](https://huggingface.co/datasets/hackelle/BigEarthNetV2-LMDB) (S1 and S2 already paired, keyed by patch name; same content as [Zenodo record 10891137](https://zenodo.org/records/10891137), v2.0.0). Uses the official `metadata.parquet`: 480,038 patches (237,871 train / 122,342 val / 119,825 test), snow/cloud/shadow already excluded. Preparation runs **only on an HF Job** (`scripts/submit.py hf --entry prepare_data`), never locally; see "Building the data" below. |
 | 2 | **Backbone.** | Decided: the `ConvEncoder` CNN for Experiment 1, random init shared across arms. |
 | 3 | **`temporal` as a spatial offset.** | Confirmed: the description says one S1 patch "for each Sentinel-2 patch", taken at the closest timestamp. The §7.6 fallback is the only option. Patch names end `_<H-order>_<V-order>` within the S2 tile, which `grid_position` parses. |
 | 4 | **BIFOLD reference numbers** for pre-flight check 4. | ResNet-18, v0.2.0 model cards, test macro-F1: [S2-only](https://huggingface.co/BIFOLD-BigEarthNetv2-0/resnet18-s2-v0.2.0) 0.644, [S1-only](https://huggingface.co/BIFOLD-BigEarthNetv2-0/resnet18-s1-v0.2.0) 0.566, [S1+S2](https://huggingface.co/BIFOLD-BigEarthNetv2-0/resnet18-all-v0.2.0) 0.659. Pass `--ref opt=0.644 --ref sar=0.566`. |
@@ -14,7 +14,7 @@ How [`exp1-preanalysis.md`](exp1-preanalysis.md) maps to code, which unstated de
 
 ## Arms (§2.1)
 
-All six are one class, `src/models/fusion_net.py:FusionNet`; only `modalities` and the `fusion` config differ (`configs/model/<arm>.yaml`).
+All six are one class, `src/models.py:FusionNet`; only `modalities` and the `fusion` config differ (`configs/model/<arm>.yaml`).
 
 | Arm | Fusion | Structure |
 |---|---|---|
@@ -49,8 +49,9 @@ All run on standardised test batches, on CPU, from a generator seeded only by `d
 
 ```bash
 git push                                   # the job runs the pushed commit
-./scripts/prepare_hf.sh <user>/reben --dry-run
-./scripts/prepare_hf.sh <user>/reben       # -> private datasets <user>/reben-{dev,sweep,full}
+python scripts/submit.py hf --entry prepare_data --dry-run -- --source reben --out-repo <user>/reben
+python scripts/submit.py hf --entry prepare_data -- --source reben --out-repo <user>/reben
+# -> private datasets <user>/reben-{dev,sweep,full}
 ```
 
 On a `cpu-xl` job (16 vCPU, 124 GB RAM, 1 TB disk, about $1/h), the job:
@@ -65,18 +66,19 @@ Estimated output: dev about 2.5 GB, sweep about 37 GB, full about 250 GB, all pr
 
 ```bash
 # Stage 1: train 6 arms x 1 seed, then sweep each run under every degradation
-./scripts/sweep_hf.sh +experiment=exp1_pilot data.data_uri=<user>/reben-sweep \
+python scripts/submit.py hf --sweep +experiment=exp1_pilot data.data_uri=<user>/reben-sweep \
     model=opt,sar,early,late,gate_global,gate_spatial seed=0
-./scripts/submit_hf.sh --entry sweep_eval --data <user>/reben-sweep run_dir=/ckpt/<run_id> stage=pilot
-# (locally: uv run python -m src.sweep_eval run_dir=outputs/<run_id> stage=pilot)
+python scripts/submit.py hf --entry evaluate --data <user>/reben-sweep run_dir=/ckpt/<run_id> stage=pilot
+# (locally: uv run python -m src.evaluate run_dir=outputs/<run_id> stage=pilot)
+# (or train + sweep every arm in one session: --entry exp1_run, see src/exp1_run.py)
 
 uv run python -m src.preflight <runs dir> --ref opt=<BIFOLD S2> --ref sar=<BIFOLD S1>
-uv run python -m src.analysis <runs dir>      # tables, verdicts, figures -> <dir>/analysis
+uv run python -m src.analysis exp1 <runs dir> # tables, verdicts, figures -> <dir>/analysis
 
 # Stage 2, only after preflight prints READY
-./scripts/sweep_hf.sh +experiment=exp1 data.data_uri=<user>/reben-full \
+python scripts/submit.py hf --sweep +experiment=exp1 data.data_uri=<user>/reben-full \
     model=opt,sar,early,late,gate_global,gate_spatial seed=0,1,2
-./scripts/submit_hf.sh --entry sweep_eval --data <user>/reben-full run_dir=/ckpt/<run_id> stage=full
+python scripts/submit.py hf --entry evaluate --data <user>/reben-full run_dir=/ckpt/<run_id> stage=full
 ```
 
 `src.analysis` writes:
