@@ -4,16 +4,16 @@
                               [--entry E] [--data owner/dataset]... [--sweep] <overrides...>
   python scripts/submit.py kaggle [--dry-run] [--allow-dirty] [--entry E] [--kernel user/slug]
                                   [--data owner/dataset]... <overrides...>
-  python scripts/submit.py auto [--dry-run] [--allow-dirty] [--timeout T] [--entry E]
-                                [--data owner/dataset]... [--[no-]gpu] [--min-disk GB]
-                                <overrides...>
+  uv run python scripts/submit.py auto [--dry-run] [--time-value USD_PER_H] [--deadline T]
+                                [--sweep] [--entry E] [--data owner/dataset]... [--[no-]gpu]
+                                [--min-disk GB] [--min-ram GB] [--timeout T] <overrides...>
   python scripts/submit.py watch [<sweep.tsv> | <owner>/<job_id>...] [--once]
 
-auto    pick the cheapest option that can run this job right now and submit it there:
-        Kaggle (free) if the kernel is idle, the job fits its 9 h GPU / 12 h CPU session and
-        disk, and the weekly GPU quota (`kaggle quota`) covers --timeout; otherwise the HF
-        Jobs flavor with the lowest live price x --timeout that has the GPU, disk (datasets
-        + 5 GB) and RAM it needs. Prints every option with its cost or why it is out.
+auto    predict the job's wall time and cost on Kaggle and every HF Jobs flavor (scripts/plan.py,
+        calibrated on real pilot jobs), drop what cannot run it right now (GPU, disk, RAM,
+        Kaggle's idle kernel / session cap / weekly GPU quota, --deadline), and submit to the
+        lowest cost + time_value x hours (--time-value, $/h, default 1: 0 = cheapest, high =
+        fastest). Prints every option; --timeout defaults to 1.5x the prediction + 15 min.
 
 hf      one detached HF Job (scripts/bootstrap.py). With --sweep, one job per combination of
         comma-separated override values (model=a,b seed=0,1 -> 4 jobs; commas inside [...]
@@ -253,132 +253,118 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
     return 0 if re.search("complete", status, re.IGNORECASE) else 1
 
 
-# ---------------------------------------------------------------- auto: cheapest usable option
+# ---------------------------------------------------------------- auto: speed vs price
 
-KAGGLE_GPU_H, KAGGLE_CPU_H = 9, 12  # Kaggle session caps
-KAGGLE_DISK_GB = 50  # scratch space the bootstrap has been seen to get (fits the pilot tier)
 JOB_OVERHEAD_GB = 5  # repo, uv env and caches next to the downloaded datasets
 
 
-@dataclass
-class Option:
-    name: str  # "kaggle" or an HF Jobs flavor
-    usd: float | None  # estimated cost of the whole --timeout; None = unusable right now
-    note: str  # spec, or why it cannot be used
-
-
-@dataclass
-class Needs:
-    gpu: bool
-    hours: float
-    disk_gb: float
-    ram_gb: float
-
-
-def needs(a: argparse.Namespace, overrides: list[str], data_gb: float) -> Needs:
-    """What the job needs. GPU unless it is data preparation or explicitly CPU (smoke)."""
-    cpu_only = a.entry == "prepare_data" or any(
-        o in ("trainer.accelerator=cpu", "+experiment=smoke") for o in overrides)
-    prep = a.entry == "prepare_data"  # the reBEN LMDB (155 GB) + three tiers (~290 GB)
-    return Needs(gpu=a.gpu if a.gpu is not None else not cpu_only,
-                 hours=seconds(default_timeout(a)) / 3600,
-                 disk_gb=a.min_disk or (500 if prep else data_gb + JOB_OVERHEAD_GB),
-                 ram_gb=a.min_ram or (100 if prep else 0))
-
-
-def _gb(spec: str | None) -> float:
-    m = re.match(r"([\d.]+)\s*([GT])B", spec or "")
-    return float(m[1]) * (1000 if m[2] == "T" else 1) if m else 0.0
-
-
-def kaggle_option(a: argparse.Namespace, n: Needs) -> Option:
-    def no(why: str) -> Option:
-        return Option("kaggle", None, why)
+def kaggle_unusable(a: argparse.Namespace, w, hours: float) -> str | None:
+    """Why the Kaggle kernel cannot take this job right now (None: it can)."""
+    import plan
 
     if a.entry == "prepare_data":
-        return no("data preparation needs a big CPU machine")
+        return "data preparation needs a big CPU machine"
+    if len(w.jobs) > 1:
+        return f"one kernel cannot run {len(w.jobs)} jobs at once (use --entry exp1_run)"
     if not shutil.which("kaggle"):
-        return no("kaggle CLI not found")
+        return "kaggle CLI not found"
     kernel = a.kernel or os.environ.get("KAGGLE_KERNEL")
     if not kernel:
-        return no("KAGGLE_KERNEL not set")
-    cap = KAGGLE_GPU_H if n.gpu else KAGGLE_CPU_H
-    if n.hours > cap:
-        return no(f"timeout {n.hours:g} h > {cap} h session cap")
-    if n.disk_gb > KAGGLE_DISK_GB:
-        return no(f"needs {n.disk_gb:.0f} GB disk > {KAGGLE_DISK_GB} GB")
+        return "KAGGLE_KERNEL not set"
+    cap = plan.KAGGLE["gpu_h" if w.gpu else "cpu_h"]
+    if hours * plan.SAFETY > cap:
+        return f"~{plan.fmt_h(hours)} is too close to the {cap} h session cap"
     env = os.environ | {"PYTHONUTF8": "1"}
     status = subprocess.run(["kaggle", "kernels", "status", kernel], capture_output=True,
                             text=True, env=env).stdout
     if re.search(r"running|queued", status, re.IGNORECASE):
-        return no(f"{kernel} is still running (a push would replace it)")
-    if n.gpu:
+        return f"{kernel} is still running (a push would replace it)"
+    if w.gpu:
         res = subprocess.run(["kaggle", "quota", "--format", "json"], capture_output=True,
                              text=True, env=env)
         try:
             gpu = next(q for q in json.loads(res.stdout) if q["resource"] == "GPU")
         except (ValueError, StopIteration):
-            return no("cannot read the GPU quota (`kaggle quota`)")
+            return "cannot read the GPU quota (`kaggle quota`)"
         left = float(gpu["remaining"].rstrip("h"))
-        if left < n.hours:
-            return no(f"GPU quota {left:g} h left < {n.hours:g} h (refills {gpu['refreshAt']})")
-        return Option("kaggle", 0.0, f"free, T4/P100, GPU quota {left:g} h left")
-    return Option("kaggle", 0.0, "free, CPU session")
+        if left < hours * plan.SAFETY:
+            return f"GPU quota {left:g} h left (refills {gpu['refreshAt']})"
+    return None
 
 
-def hf_options(api, n: Needs) -> list[Option]:
-    """Every single-device HF Jobs flavor, priced live for the whole timeout."""
-    me = api.whoami()
-    blocked = None
+def hf_unusable(api) -> str | None:
     if not os.environ.get("HF_BUCKET"):
-        blocked = "HF_BUCKET not set"
-    elif not (me.get("isPro") or me.get("canPay") or me.get("orgs")):
-        blocked = "account cannot run Jobs (needs PRO or billing)"
-    out = []
-    for h in api.list_jobs_hardware():
-        acc = h.accelerator
-        if (acc is not None and int(acc.quantity) > 1) or (n.gpu and acc is None):
-            continue  # training uses one device; CPU flavors cannot run a GPU job
-        price = h.unit_cost_usd * 60
-        why = blocked
-        if not why and _gb(h.ephemeral_storage) < n.disk_gb:
-            why = f"{h.ephemeral_storage} disk < {n.disk_gb:.0f} GB needed"
-        if not why and _gb(h.ram) < n.ram_gb:
-            why = f"{h.ram} RAM < {n.ram_gb:.0f} GB needed"
-        spec = (f"{price:.2f} $/h, {acc.model if acc else 'CPU'}, {h.ram} RAM, "
-                f"{h.ephemeral_storage} disk")
-        out.append(Option(h.name, None if why else price * n.hours, why or spec))
-    return out
+        return "HF_BUCKET not set"
+    me = api.whoami()
+    if not (me.get("isPro") or me.get("canPay") or me.get("orgs")):
+        return "account cannot run Jobs (needs PRO or billing)"
+    return None
 
 
 def auto(a: argparse.Namespace, overrides: list[str]) -> int:
-    """Submit to the cheapest option usable right now (Kaggle when its quota allows: free)."""
-    if a.sweep:
-        die("auto submits one job; for a whole stage on Kaggle use --entry exp1_run")
+    """Predict time and cost everywhere usable now; submit to the best trade-off."""
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # manifest download
+    import plan
     from huggingface_hub import HfApi
 
     api = HfApi(token=os.environ.get("HF_TOKEN"))
-    repos = datasets(overrides, a.data).split()
+    combos = expand(overrides) if a.sweep else [overrides]
+    repos = sorted({r for c in combos for r in datasets(c, a.data).split()})
     data_gb = sum((s.size or 0) for r in repos
                   for s in api.dataset_info(r, files_metadata=True).siblings) / 1e9
-    n = needs(a, overrides, data_gb)
-    options = [kaggle_option(a, n), *hf_options(api, n)]
-    usable = sorted((o for o in options if o.usd is not None), key=lambda o: o.usd)
-    print(f"job needs: {'GPU' if n.gpu else 'CPU'}, {n.hours:g} h, {n.disk_gb:.0f} GB disk"
-          + (f", {n.ram_gb:.0f} GB RAM" if n.ram_gb else "")
-          + (f" (datasets {data_gb:.1f} GB)" if repos else ""))
-    for o in usable + [o for o in options if o.usd is None]:
-        cost = "  n/a  " if o.usd is None else f"${o.usd:6.2f}"
-        print(f"  {'->' if usable and o is usable[0] else '  '} {o.name:<16}{cost}  {o.note}")
-    if not usable:
+    w = plan.Work([plan.job_runs(a.entry, c, repos, api) for c in combos], data_gb)
+    if a.gpu is not None:
+        for r in (r for j in w.jobs if j for r in j):
+            r.gpu = a.gpu
+    prep = a.entry == "prepare_data"
+    need_disk = a.min_disk or (500 if prep else data_gb + JOB_OVERHEAD_GB)
+    need_ram = a.min_ram or (100 if prep else 0)
+    timeout_h = seconds(default_timeout(a)) / 3600
+
+    kaggle = plan.kaggle_option()
+    plan.predict(w, kaggle, timeout_h)
+    kaggle.why_not = kaggle_unusable(a, w, kaggle.hours)
+    hf = plan.hf_options(api)
+    for o in hf:
+        o.why_not = hf_unusable(api)
+    ranked = plan.plan(w, [kaggle, *hf], a.time_value, a.deadline and seconds(a.deadline) / 3600,
+                       timeout_h, need_disk, need_ram)
+
+    runs = [r for j in w.jobs if j for r in j]
+    print(f"job: {len(w.jobs)} job(s), {len(runs)} run(s), "
+          f"{sum(r.train for r in runs) / 1e3:.0f}k training samples, "
+          f"{'GPU' if w.gpu else 'CPU'}, data {data_gb:.1f} GB; "
+          f"an hour of waiting is worth ${a.time_value:g}"
+          + ("" if w.modelled else "; no speed model for this entry: priced at --timeout"))
+    print(f"     {'option':<16}{'time':>9}{'cost':>9}{'score':>9}  ")
+    for o in ranked:
+        if o.why_not == "no GPU":
+            continue  # a GPU job: CPU flavors are not candidates
+        if o.why_not:
+            print(f"     {o.name:<16}{'':>27}  {o.why_not}")
+            continue
+        spec = f"{o.gpu or 'CPU'}, {o.vcpu} vCPU" + (", input-bound" if o.loader_bound else "")
+        tags = f"  [{', '.join(o.tags)}]" if o.tags else ""
+        cost, score = f"${o.cost:.2f}", f"${o.cost + a.time_value * o.hours:.2f}"
+        print(f"  {'->' if 'pick' in o.tags else '  '} {o.name:<16}{plan.fmt_h(o.hours):>9}"
+              f"{cost:>9}{score:>9}  {spec}{tags}")
+    best = ranked[0]
+    if best.why_not:
         die("nothing can run this job right now")
-    best = usable[0]
-    a.min_free_gb = round(n.disk_gb) if repos else None
-    a.gpu = n.gpu
+    room = best.vcpu - plan.WORKER_RESERVED_VCPU
+    few = [r.workers for r in runs if r.workers < room]
+    if best.loader_bound and few:
+        print(f"hint: {best.name} has {best.vcpu} vCPUs but runs use data.num_workers={min(few)}; "
+              f"data.num_workers={room} would load faster (it may change the sample order, so "
+              "keep it identical across arms)")
+    a.min_free_gb = round(need_disk) if repos else None
+    a.gpu = w.gpu
+    if w.modelled and not a.timeout:
+        a.timeout = plan.suggested_timeout(best.hours)
     if best.name == "kaggle":
         return submit_kaggle(a, overrides)
     a.flavor = best.name
-    submit_hf(a, overrides)
+    (sweep_hf if a.sweep else submit_hf)(a, overrides)
     return 0
 
 
@@ -576,6 +562,9 @@ def main(argv: list[str]) -> int:
     if command == "hf":
         ap.add_argument("--flavor")
     if command == "auto":
+        ap.add_argument("--time-value", type=float, default=1.0, metavar="USD_PER_H",
+                        help="what an hour of waiting is worth: 0 = cheapest, high = fastest")
+        ap.add_argument("--deadline", help="must finish within, e.g. 2h or 90m")
         ap.add_argument("--min-disk", type=float, help="GB; default: datasets + 5")
         ap.add_argument("--min-ram", type=float, help="GB; default: 100 for prepare_data")
     rest = argv[1:]

@@ -214,15 +214,42 @@ def test_jobs_from_sweep_tsv(tmp_path: Path) -> None:
     assert _load_submit().jobs_from_args([str(tsv)]) == [("o/1", "late s2")]
 
 
-# ---------------------------------------------------------------- auto
+# ---------------------------------------------------------------- auto / plan
 
-def _hw(name, usd_h, disk, ram="30 GB", gpu=None):
+PILOT = ["+experiment=exp1_pilot", "data.data_uri=acme/sweep", "data.num_workers=10"]
+SIZES = {"train": 35681, "val": 18351, "test": 17974}  # the real 15 % tier
+
+
+def _plan():
+    import sys
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import plan
+
+    return plan
+
+
+def test_plan_reproduces_the_measured_pilot_jobs() -> None:
+    """Calibration check: HF a10g-large wall times of the 2026-10-13 pilot (running_secs)."""
+    plan = _plan()
+    measured = {"opt": 547, "sar": 538, "early": 554, "gate_spatial": 654}
+    for arm, real in measured.items():
+        run = plan.RunWork(arm, train=15 * SIZES["train"],
+                           evals=15 * SIZES["val"] + SIZES["test"], workers=10)
+        o = plan.Option("a10g-large", 1.5, 12, "A10G", 200, 46, plan.HF_OVERHEAD_S)
+        plan.predict(plan.Work([[run]], 41.5), o, 4)
+        assert abs(o.hours * 3600 / real - 1) < 0.1, (arm, o.hours * 3600, real)
+
+
+def _hw(name, usd_h, vcpu, disk, ram="30 GB", gpu=None):
     acc = types.SimpleNamespace(model=gpu, quantity="1") if gpu else None
-    return types.SimpleNamespace(name=name, unit_cost_usd=usd_h / 60, ephemeral_storage=disk,
-                                 ram=ram, accelerator=acc)
+    return types.SimpleNamespace(name=name, unit_cost_usd=usd_h / 60, cpu=f"{vcpu} vCPU",
+                                 ephemeral_storage=disk, ram=ram, accelerator=acc)
 
 
 class _FakeHub:
+    manifest: Path
+
     def __init__(self, *a, **k):
         pass
 
@@ -230,19 +257,26 @@ class _FakeHub:
         return {"name": "acme", "isPro": True}
 
     def list_jobs_hardware(self):
-        return [_hw("cpu-basic", 0.01, "50 GB"), _hw("t4-small", 0.4, "50 GB", gpu="T4"),
-                _hw("a10g-small", 1.0, "110 GB", gpu="A10G"),
-                _hw("cpu-xl", 1.0, "1000 GB", "124 GB")]
+        return [_hw("cpu-basic", 0.01, 2, "50 GB", "16 GB"),
+                _hw("cpu-xl", 1.0, 16, "1000 GB", "124 GB"),
+                _hw("t4-small", 0.4, 4, "50 GB", "15 GB", gpu="T4"),
+                _hw("a10g-large", 1.5, 12, "200 GB", "46 GB", gpu="A10G"),
+                _hw("h200", 5.0, 23, "3000 GB", "256 GB", gpu="H200")]
 
     def dataset_info(self, repo, files_metadata):
-        return types.SimpleNamespace(siblings=[types.SimpleNamespace(size=60e9)])
+        return types.SimpleNamespace(siblings=[types.SimpleNamespace(size=41.5e9)])
+
+    def hf_hub_download(self, repo, filename, repo_type):
+        return str(self.manifest)
 
 
 @pytest.fixture
-def fake_cloud(submit, monkeypatch):
+def fake_cloud(submit, monkeypatch, tmp_path):
     """Kaggle with `quota` GPU hours left and an idle kernel; a fixed HF hardware list."""
     import huggingface_hub
 
+    _FakeHub.manifest = tmp_path / "manifest.json"
+    _FakeHub.manifest.write_text(json.dumps({"sizes": SIZES}))
     monkeypatch.setattr(huggingface_hub, "HfApi", _FakeHub)
     monkeypatch.setattr(submit.mod.shutil, "which", lambda name, path=None: f"/bin/{name}")
     real_run, state = subprocess.run, {"quota": "30.00h"}
@@ -260,30 +294,46 @@ def fake_cloud(submit, monkeypatch):
     return state
 
 
-def test_auto_picks_free_kaggle_when_quota_covers_the_job(submit, fake_cloud) -> None:
-    out = submit("auto", "--dry-run", "--timeout", "8h", "model=opt")
-    assert "-> kaggle" in out and "kaggle kernels push" in out and "hf jobs" not in out
+def _picked(out: str) -> str:
+    return next(line.split()[1] for line in out.splitlines() if line.startswith("  -> "))
 
 
-def test_auto_falls_back_to_the_cheapest_hf_flavor_that_fits(submit, fake_cloud) -> None:
-    fake_cloud["quota"] = "2.00h"
-    out = submit("auto", "--dry-run", "--timeout", "8h", "model=opt")
-    assert "GPU quota 2 h left < 8 h" in out
+def test_auto_time_value_trades_free_kaggle_for_speed(submit, fake_cloud) -> None:
+    out = submit("auto", "--dry-run", "--time-value", "0", *PILOT, "model=opt")
+    assert _picked(out) == "kaggle"
+    out = submit("auto", "--dry-run", "--time-value", "50", *PILOT, "model=opt")
+    assert _picked(out) == "h200"
     (cmd,) = _hf_commands(out)
-    assert _has(cmd, "--flavor", "t4-small") and not any(c.startswith("DATASETS=") for c in cmd)
-    # 60 GB of data: neither Kaggle nor t4-small (50 GB disk) fits; a10g-small does.
-    out = submit("auto", "--dry-run", "--timeout", "4h", "data.data_uri=acme/big")
-    (cmd,) = _hf_commands(out)
-    assert _has(cmd, "--flavor", "a10g-small") and _has(cmd, "-e", "MIN_FREE_GB=65")
-    assert "50 GB disk < 65 GB needed" in out
+    assert _has(cmd, "--flavor", "h200") and _has(cmd, "-e", "MIN_FREE_GB=46")
+    timeout = cmd[cmd.index("--timeout") + 1]
+    assert timeout.endswith("m") and int(timeout[:-1]) < 60  # sized from the prediction
+
+
+def test_auto_respects_quota_and_deadline(submit, fake_cloud) -> None:
+    fake_cloud["quota"] = "0.20h"
+    out = submit("auto", "--dry-run", "--time-value", "0", *PILOT, "model=opt")
+    assert "GPU quota 0.2 h left" in out and _picked(out) == "t4-small"
+    out = submit("auto", "--dry-run", "--time-value", "0", "--deadline", "20m", *PILOT,
+                 "model=opt")
+    assert "> deadline 20 min" in out and _picked(out) == "a10g-large"
+
+
+def test_auto_sweep_runs_in_parallel_on_hf(submit, fake_cloud) -> None:
+    out = submit("auto", "--sweep", "--dry-run", "--time-value", "0", *PILOT,
+                 "model=opt,gate_spatial")
+    assert "one kernel cannot run 2 jobs at once" in out
+    cmds = _hf_commands(out)
+    assert len(cmds) == 2 and len({c[c.index("--flavor") + 1] for c in cmds}) == 1
 
 
 def test_auto_runs_cpu_jobs_on_cpu(submit, fake_cloud, repo: Path) -> None:
-    out = submit("auto", "--dry-run", "--timeout", "30m", "+experiment=smoke")
-    assert "free, CPU session" in out
+    # At $1/h a 30 s HF start for a fraction of a cent beats Kaggle's ~150 s free start.
+    assert _picked(submit("auto", "--dry-run", "+experiment=smoke")) == "cpu-basic"
+    out = submit("auto", "--dry-run", "--time-value", "0", "+experiment=smoke")
+    assert ", CPU," in out and _picked(out) == "kaggle"
     meta = json.loads((repo / "outputs" / "kaggle_build" / "acme_rob-train"
                        / "kernel-metadata.json").read_text())
     assert meta["enable_gpu"] is False  # a CPU session spends no GPU quota
     (cmd,) = _hf_commands(submit("auto", "--dry-run", "--entry", "prepare_data", "--",
                                  "--source", "reben"))
-    assert _has(cmd, "--flavor", "cpu-xl")  # 500 GB disk, 100 GB RAM
+    assert _has(cmd, "--flavor", "cpu-xl")  # 500 GB disk, 100 GB RAM; priced at --timeout

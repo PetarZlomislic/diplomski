@@ -216,14 +216,16 @@ The script stamps the commit, `RUN_ENV=kaggle` and your overrides into a copy of
 
 Kaggle sessions have a hard 9 h limit; the time budget (§3) stops cleanly before it. Each push replaces the kernel's previous version, so use a different `--kernel` for parallel runs.
 
-### Cheapest option: `auto`
+### Best speed/price trade-off: `auto`
 
 ```bash
-python scripts/submit.py auto --dry-run --timeout 8h +experiment=exp1_pilot data.data_uri=<user>/reben-sweep model=opt
-python scripts/submit.py auto --timeout 8h +experiment=exp1_pilot data.data_uri=<user>/reben-sweep model=opt
+uv run python scripts/submit.py auto --dry-run +experiment=exp1_pilot data.data_uri=<user>/reben-sweep model=opt
+uv run python scripts/submit.py auto --time-value 0 ...    # cheapest (free Kaggle when it can)
+uv run python scripts/submit.py auto --deadline 30m ...    # cheapest that finishes in 30 min
+uv run python scripts/submit.py auto --sweep model=opt,sar,early,late,gate_global,gate_spatial ...
 ```
 
-`auto` works out what the job needs (GPU unless it is `prepare_data` or a CPU smoke run; `--timeout` hours; disk = datasets + 5 GB; `--[no-]gpu`, `--min-disk`, `--min-ram` override), prices every option live, prints the table, and submits to the cheapest usable one. Kaggle is free and wins whenever the kernel is idle, the job fits its 9 h GPU / 12 h CPU session and ~50 GB scratch disk, and `kaggle quota` still covers `--timeout`; otherwise it is the cheapest single-device HF Jobs flavor with enough GPU, disk and RAM, priced as `$/h x --timeout` (an upper bound: the job stops when training ends). It submits one job; for a whole stage on Kaggle use `--entry exp1_run`.
+`auto` reads the job's own config (epochs, tier sizes from the shard manifest, workers, arm, encoder width) and predicts its wall time on Kaggle and on every single-device HF Jobs flavor: bootstrap + dataset download + per run setup, training and evaluation, where each sample costs `1/gpu_rate + 1/loader_rate`. The rates are calibrated on the 2026-10-13 pilot jobs and reproduce them within 6% (see `scripts/plan.py`); GPU types other than the A10G use assumed speed factors. Options that cannot run the job right now drop out: no GPU, too little disk (datasets + 5 GB) or RAM, a busy Kaggle kernel, Kaggle's session cap or weekly GPU quota (`kaggle quota`, with 25% margin), `--deadline`. The pick minimises `cost + time_value x hours`; the table marks the cheapest, the fastest and the Pareto-optimal options. A sweep runs its jobs in parallel on one flavor (so not on Kaggle; use `--entry exp1_run` for a whole stage in one free session). When the pick is input-bound, a hint says how many `data.num_workers` its vCPUs would allow. `--timeout` defaults to 1.5x the prediction + 15 min; `prepare_data` has no speed model and is priced at `--timeout`.
 
 ## 9. Reading the logs
 
