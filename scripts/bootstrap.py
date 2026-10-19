@@ -14,8 +14,8 @@ Settings: REPO_SLUG (owner/repo), REPO_SHA, ENTRY (train|evaluate|...), DATASETS
 a private repo, and on Kaggle HYDRA_OVERRIDES. Each DATASETS repo is downloaded to the job's
 own disk at <data root>/<owner>/<name> before the entrypoint starts, and DATA_ROOT points
 there: reading shards through a mounted or streamed Hub repo starved the GPU (~45 samples/s).
-On Kaggle that is the scratch disk, not the 20 GB /kaggle/working output area; a private repo there needs a
-Kaggle Secret named HF_TOKEN attached to the kernel.
+On Kaggle that is the scratch disk, not the 20 GB /kaggle/working output area; a private repo
+there needs a Kaggle Secret named HF_TOKEN attached to the kernel.
 
 The project runs in its own uv venv, never on top of preinstalled packages (Kaggle's include
 extras, e.g. transformers, that conflict with the pinned versions once imported).
