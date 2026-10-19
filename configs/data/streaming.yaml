@@ -1,10 +1,10 @@
 # Streams shards written by `python -m src.prepare_data`. A relative data_uri resolves
 # against the runtime data root (local: data/, Kaggle: /kaggle/input/, HF Jobs: /datasets/,
-# where submit_hf.sh mounts the Hub dataset); absolute paths, ./paths, file:// and other
+# where the job downloads the Hub dataset); absolute paths, ./paths, file:// and other
 # URIs are used as given. hf:// does NOT work for shards (litdata reads it as Parquet). E.g.
 #   data=streaming data.data_uri=prepared/dev           (local -> data/prepared/dev)
 #   data=streaming data.data_uri=<user>/reben-dev       (HF Jobs -> /datasets/<user>/reben-dev)
-_target_: src.data.streaming.StreamingDataModule
+_target_: src.data.StreamingDataModule
 data_uri: ???
 num_classes: 19
 in_channels:

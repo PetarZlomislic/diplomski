@@ -18,11 +18,19 @@ Test shards additionally carry `sar_shift_<k>` for each `--temporal-steps` k: th
 the patch k grid cells away in the same tile, looked up in the FULL source (see
 src/degradations/temporal.py).
 
+reBEN (BigEarthNet v2.0) source: the LMDB published by the reBEN authors on the Hub
+(hackelle/BigEarthNetV2-LMDB): one SafeTensors record per patch, keyed by the S2 `patch_id`
+(bands B01..B12) or by the S1 `s1_name` (VV, VH), plus the official `metadata.parquet`. The
+parquet is the recommended set: patches with seasonal snow, cloud or cloud shadow are already
+excluded. Patches are read LAZILY: a record holds `PatchRef`s, and pixels are only read (in
+the litdata worker) when a shard is written. The 20 m and 60 m S2 bands are bilinearly
+resampled to 120 x 120 there, once.
+
 Usage:
   python -m src.prepare_data --source synthetic --fraction 0.01 --out-dir data/prepared
   python -m src.prepare_data --source synthetic --out-dir data/prepared --out-repo user/reben
-  python -m src.prepare_data --source reben --out-repo user/reben      # remote only, see
-                                                                        # scripts/prepare_hf.sh
+  python -m src.prepare_data --source reben --out-repo user/reben      # remote only:
+  python scripts/submit.py hf --entry prepare_data -- --source reben --out-repo user/reben
 """
 import argparse
 import json
@@ -30,6 +38,7 @@ import os
 import random
 import tempfile
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -90,22 +99,138 @@ def synthetic_source(
     return records
 
 
+# ---------------------------------------------------------------- reBEN source
+
+DEFAULT_SOURCE = "hf://datasets/hackelle/BigEarthNetV2-LMDB"
+LMDB_DIR = "BENv2.lmdb"
+METADATA = "metadata.parquet"
+SIZE = 120
+S2_BANDS = ("B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12")
+S1_BANDS = ("VV", "VH")  # backscatter in dB, not speckle-filtered
+REBEN_SPLITS = {"train": "train", "validation": "val", "test": "test"}
+# The 19-class nomenclature, in the order of the official description (Table 1).
+CLASSES = (
+    "Urban fabric",
+    "Industrial or commercial units",
+    "Arable land",
+    "Permanent crops",
+    "Pastures",
+    "Complex cultivation patterns",
+    "Land principally occupied by agriculture, with significant areas of natural vegetation",
+    "Agro-forestry areas",
+    "Broad-leaved forest",
+    "Coniferous forest",
+    "Mixed forest",
+    "Natural grassland and sparsely vegetated areas",
+    "Moors, heathland and sclerophyllous vegetation",
+    "Transitional woodland, shrub",
+    "Beaches, dunes, sands",
+    "Inland wetlands",
+    "Coastal wetlands",
+    "Inland waters",
+    "Marine waters",
+)
+
+_ENVS: dict[str, Any] = {}  # one read-only LMDB handle per process (litdata workers)
+
+
+def _env(path: str):
+    if path not in _ENVS:
+        import lmdb
+
+        _ENVS[path] = lmdb.open(path, readonly=True, lock=False, readahead=False,
+                                max_readers=512, subdir=True)
+    return _ENVS[path]
+
+
+def _resize(x: np.ndarray, size: int) -> np.ndarray:
+    import torch
+    import torch.nn.functional as F
+
+    t = torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32))[None, None]
+    return F.interpolate(t, size=(size, size), mode="bilinear", align_corners=False)[0, 0].numpy()
+
+
+@dataclass(frozen=True)
+class PatchRef:
+    """A not-yet-read patch: `load()` returns (len(bands), SIZE, SIZE).
+    S2 stays uint16 (reflectance, half the bytes of float32); S1 is float32 dB."""
+
+    lmdb_path: str
+    key: str
+    bands: tuple[str, ...]
+
+    def load(self) -> np.ndarray:
+        from safetensors.numpy import load as st_load
+
+        with _env(self.lmdb_path).begin() as txn:
+            raw = txn.get(self.key.encode())
+        if raw is None:
+            raise KeyError(f"{self.key} not in {self.lmdb_path}")
+        tensors = st_load(raw)
+        out = []
+        for b in self.bands:
+            x = tensors[b]
+            if x.shape != (SIZE, SIZE):
+                x = _resize(x, SIZE)
+            out.append(np.asarray(x, dtype=np.float32))
+        arr = np.stack(out)
+        if self.bands == S1_BANDS:
+            # dB of a zero backscatter is -inf; clamp non-finite values to a floor.
+            return np.nan_to_num(arr, nan=-50.0, neginf=-50.0, posinf=30.0).astype(np.float32)
+        return np.clip(np.rint(arr), 0, np.iinfo(np.uint16).max).astype(np.uint16)
+
+
+def materialize(value: Any) -> Any:
+    return value.load() if isinstance(value, PatchRef) else value
+
+
+def multi_hot(labels) -> np.ndarray:
+    idx = {c: i for i, c in enumerate(CLASSES)}
+    unknown = set(labels) - set(idx)
+    if unknown:
+        raise ValueError(f"labels outside the 19-class nomenclature: {sorted(unknown)}")
+    y = np.zeros(len(CLASSES), dtype=np.uint8)
+    y[[idx[c] for c in labels]] = 1
+    return y
+
+
+def resolve_source(source: str, work_dir: Path) -> Path:
+    """A local directory with BENv2.lmdb/ and metadata.parquet; hf://datasets/<repo> is
+    downloaded into `work_dir` first (~155 GB: run this on a remote machine)."""
+    if source.startswith("hf://datasets/"):
+        from huggingface_hub import snapshot_download
+
+        repo = source[len("hf://datasets/"):].strip("/")
+        return Path(snapshot_download(repo, repo_type="dataset",
+                                      local_dir=str(work_dir / repo.replace("/", "__"))))
+    return Path(source)
+
+
+def load_reben(root: Path) -> list[dict[str, Any]]:
+    import pandas as pd
+
+    lmdb_path = str(root / LMDB_DIR)
+    meta = pd.read_parquet(root / METADATA, columns=["patch_id", "labels", "split", "s1_name"])
+    bad = set(meta["split"]) - set(REBEN_SPLITS)
+    if bad:
+        raise ValueError(f"unexpected split values {bad}")
+    return [
+        {"patch_id": pid, "split": REBEN_SPLITS[split], "label": multi_hot(labels),
+         "optical": PatchRef(lmdb_path, pid, S2_BANDS),
+         "sar": PatchRef(lmdb_path, s1, S1_BANDS)}
+        for pid, labels, split, s1 in meta.itertuples(index=False)
+    ]
+
+
 def real_source(source: str, work_dir: Path) -> list[Record]:
-    """reBEN records (see src/data/reben.py): same shape as `synthetic_source`, but the
-    bands are lazy `PatchRef`s read only when shards are written. `source` is "reben"
-    (the authors' LMDB on the Hub), hf://datasets/<repo>, or a local directory."""
-    from src.data import reben
-
-    root = reben.resolve(reben.DEFAULT_SOURCE if source == "reben" else source, work_dir)
-    return reben.load_records(root)
+    """reBEN records: same shape as `synthetic_source`, but the bands are lazy `PatchRef`s.
+    `source` is "reben" (the authors' LMDB on the Hub), hf://datasets/<repo>, or a local
+    directory containing BENv2.lmdb/ and metadata.parquet."""
+    return load_reben(resolve_source(DEFAULT_SOURCE if source == "reben" else source, work_dir))
 
 
-def _array(value: Any) -> Any:
-    """Pixels of a band: eager arrays pass through, lazy reBEN patches are read."""
-    from src.data.reben import materialize
-
-    return materialize(value)
-
+# ---------------------------------------------------------------- sampling and shards
 
 def sample_split(
     records: list[Record], fraction: float, min_per_class: int, rng: random.Random
@@ -227,7 +352,7 @@ def band_stats(records: list[Record], max_records: int = 5000,
     for m in BANDS:
         n, s, ss = 0, 0.0, 0.0
         for r in records:
-            x = np.asarray(_array(r[m]), dtype=np.float64)
+            x = np.asarray(materialize(r[m]), dtype=np.float64)
             n += x.shape[1] * x.shape[2]
             s = s + x.sum(axis=(1, 2))
             ss = ss + (x * x).sum(axis=(1, 2))
@@ -240,7 +365,7 @@ def band_stats(records: list[Record], max_records: int = 5000,
 
 def _to_sample(record: Record) -> Record:
     """litdata worker fn; module-level so it pickles under spawn (Windows)."""
-    return {k: _array(v) for k, v in record.items() if k != "split"}
+    return {k: materialize(v) for k, v in record.items() if k != "split"}
 
 
 def write_shards(by_split: dict[str, list[Record]], out_dir: Path, chunk_bytes: str = "128MB",
@@ -339,8 +464,6 @@ def main() -> None:
                     help="single tier at this fraction (default: dev, sweep and full)")
     ap.add_argument("--min-per-class", type=int, default=1)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--split-aware", action=argparse.BooleanOptionalAction, default=True,
-                    help="sample within official splits (cannot be disabled; kept explicit)")
     ap.add_argument("--temporal-steps", type=int, nargs="*", default=list(TEMPORAL_STEPS),
                     help="grid steps of shifted SAR to store in test shards (none: disable)")
     ap.add_argument("--synthetic-n", type=int, default=6000)
@@ -351,8 +474,6 @@ def main() -> None:
     ap.add_argument("--stats-samples", type=int, default=5000,
                     help="train patches sampled for band_stats")
     args = ap.parse_args()
-    if not args.split_aware:
-        ap.error("--no-split-aware is refused: sampling across splits leaks test geography")
 
     from src.env import detect
 

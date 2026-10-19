@@ -1,8 +1,4 @@
-defaults:
-  - fusion: passthrough
-  - _self_
-
-_target_: src.models.dummy.DummyModel
+_target_: src.models.DummyModel
 num_classes: ${data.num_classes}
 in_channels: ${data.in_channels}
 image_size: ${data.image_size}

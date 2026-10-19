@@ -100,9 +100,3 @@ def detect() -> Env:
         max_runtime_s=int(os.environ["MAX_RUNTIME_S"]) if "MAX_RUNTIME_S" in os.environ else max_s,
     )
 
-
-def get_output_root(output_dir: str | None) -> Path:
-    """Durable output root: explicit config override, else the runtime's root."""
-    root = Path(output_dir).resolve() if output_dir else detect().output_root
-    root.mkdir(parents=True, exist_ok=True)
-    return root

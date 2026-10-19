@@ -1,2 +1,0 @@
-_target_: src.models.fusion.passthrough.PassthroughFusion
-in_dims: ${data.in_channels}

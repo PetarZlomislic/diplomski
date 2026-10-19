@@ -24,7 +24,7 @@ def group_names(group: str) -> list[str]:
 
 
 def model_names() -> list[str]:
-    return group_names("model")
+    return [n for n in group_names("model") if not n.startswith("_")]
 
 
 @pytest.fixture(scope="session")

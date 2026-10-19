@@ -1,7 +1,7 @@
 # @package _global_
 # Experiment 1, Stage 2 (the reported experiment, pre-analysis §8): 6 arms x 3 seeds,
 # full splits.
-#   ./scripts/sweep_hf.sh +experiment=exp1 model=opt,sar,early,late,gate_global,gate_spatial seed=0,1,2
+#   python scripts/submit.py hf --sweep +experiment=exp1 model=opt,sar,early,late,gate_global,gate_spatial seed=0,1,2
 # Identical schedule/optimiser/augmentation for every arm (§6): never override per arm.
 defaults:
   - override /data: streaming

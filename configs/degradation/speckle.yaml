@@ -1,6 +1,6 @@
 # Multiplicative gamma speckle on SAR; severity s -> L = looks_min / s looks
 # (grid .25/.5/.75/1 -> L = 4/2/1.33/1).
-_target_: src.degradations.speckle.Speckle
+_target_: src.degradations.Speckle
 modality: sar
 scale: db                    # reBEN S1 backscatter is stored in dB
 looks_min: 1.0

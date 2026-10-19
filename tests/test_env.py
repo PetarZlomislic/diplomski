@@ -7,7 +7,6 @@ import pytest
 from omegaconf import OmegaConf
 
 from src.env import Env, Runtime, detect
-from src.obs import resolve_wandb_mode
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_VARS = ["RUN_ENV", "KAGGLE_KERNEL_RUN_TYPE", "HAS_INTERNET", "OUTPUT_ROOT", "DATA_ROOT",
@@ -78,11 +77,6 @@ def test_train_on_kaggle_reads_overrides_from_env(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr[-2000:]
     (run_cfg,) = tmp_path.glob("*/run_config.yaml")
     assert OmegaConf.load(run_cfg).cfg.model.hidden_dim == 128  # dummy_wide
-
-
-def test_wandb_forced_offline_without_internet() -> None:
-    assert resolve_wandb_mode("online", has_internet=False) == "offline"
-    assert resolve_wandb_mode("online", has_internet=True) == "online"
 
 
 def test_no_module_outside_env_mentions_runtime_specifics() -> None:

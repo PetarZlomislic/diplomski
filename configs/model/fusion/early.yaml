@@ -1,2 +1,2 @@
-_target_: src.models.fusion.early.EarlyFusion
+_target_: src.models.EarlyFusion
 _partial_: true

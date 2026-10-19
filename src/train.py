@@ -1,4 +1,4 @@
-"""Training entrypoint: config -> checkpoint."""
+"""Training entrypoint: config -> checkpoint, plus one clean test-split results row."""
 import sys
 import time
 from datetime import timedelta
@@ -6,35 +6,29 @@ from pathlib import Path
 
 import hydra
 import lightning as L
+import psutil
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch.callbacks import ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
-from src.callbacks.heartbeat import Heartbeat, HeartbeatCallback
-from src.callbacks.sysmetrics import SysMetricsCallback
-from src.callbacks.throughput import ThroughputCallback
-from src.env import Env, detect, get_output_root
-from src.module import LitModule
-from src.results import RUN_CONFIG
+from src.env import detect
+from src.evaluate import RUN_CONFIG, evaluate
+from src.models import LitModule
 from src.obs import (
+    Heartbeat,
+    HeartbeatCallback,
+    ThroughputCallback,
     config_hash,
     failure_fields,
     git_sha,
     new_run_id,
-    resolve_wandb_mode,
     run_header,
     setup_logging,
+    sys_fields,
 )
 
-CLEAN = {"_target_": "src.degradations.none.NoDegradation"}
-
-
-def _process_elapsed_s() -> float:
-    """Seconds since this process started; a runtime's wall-clock cap counts from about then."""
-    import psutil
-
-    return time.time() - psutil.Process().create_time()
+CLEAN = {"_target_": "src.degradations.Degradation"}
 
 
 def time_budget_s(max_runtime_s: int | None, elapsed_s: float, margin_s: float) -> float | None:
@@ -43,14 +37,6 @@ def time_budget_s(max_runtime_s: int | None, elapsed_s: float, margin_s: float) 
     if max_runtime_s is None:
         return None
     return max(60.0, max_runtime_s - elapsed_s - margin_s)
-
-
-def _wandb_logger(cfg: DictConfig, env: Env, run_id: str, output_dir: Path):
-    from lightning.pytorch.loggers import WandbLogger
-
-    mode = resolve_wandb_mode(cfg.wandb.mode, env.has_internet)
-    return WandbLogger(project=cfg.wandb.project, name=run_id, id=run_id,
-                       save_dir=str(output_dir), mode=mode, resume="allow")
 
 
 def _to_seconds(max_time: object) -> float:
@@ -74,7 +60,8 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
     if resume:
         output_dir = Path(resume).resolve().parent.parent
     else:
-        output_dir = get_output_root(cfg.get("output_dir")) / new_run_id()
+        root = Path(cfg.output_dir).resolve() if cfg.get("output_dir") else env.output_root
+        output_dir = root / new_run_id()
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = output_dir.name
     log = setup_logging(run_id, output_dir, to_file=cfg.obs.jsonl)
@@ -83,53 +70,44 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
     log.emit("run_start", entrypoint="train", runtime=str(env.runtime),
              resumed_from=resume or None, **run_header(resolved))
     if not (output_dir / RUN_CONFIG).exists():
-        meta = {
-            "run_id": run_id,
-            "git_sha": git_sha(),
-            "config_hash": config_hash(resolved),
-            "model": choices.get("model", "unknown"),
-            "data": choices.get("data", "unknown"),
-        }
+        meta = {"run_id": run_id, "git_sha": git_sha(), "config_hash": config_hash(resolved),
+                "model": choices.get("model", "unknown"), "data": choices.get("data", "unknown")}
         OmegaConf.save(OmegaConf.create({"meta": meta, "cfg": resolved}), output_dir / RUN_CONFIG)
 
     t0 = time.monotonic()
     trainer: L.Trainer | None = None
     budget: float | None = None
-    sysmetrics = SysMetricsCallback()
     throughput = ThroughputCallback(log, cfg.obs.warn_data_wait_frac)
-    heartbeat = Heartbeat(log, cfg.obs.heartbeat_s, sources=[throughput.fields, sysmetrics.fields])
+    heartbeat = Heartbeat(log, cfg.obs.heartbeat_s, sources=[throughput.fields, sys_fields])
+    ckpt_dir = output_dir / "checkpoints"
     try:
         L.seed_everything(cfg.seed, workers=True, verbose=False)
         datamodule = instantiate(cfg.data)
-        module = LitModule(
-            model_cfg=resolved["model"], optim_cfg=resolved["optim"], threshold=cfg.threshold,
-            sched_cfg=resolved.get("sched"),
-        )
-        ckpt_dir = output_dir / "checkpoints"
-        best_cb = ModelCheckpoint(
-            dirpath=ckpt_dir, filename="best", monitor="val/f1_macro", mode="max", save_last=True
-        )
+        module = LitModule(model_cfg=resolved["model"], optim_cfg=resolved["optim"],
+                           threshold=cfg.threshold, sched_cfg=resolved.get("sched"))
+        best_cb = ModelCheckpoint(dirpath=ckpt_dir, filename="best", monitor="val/f1_macro",
+                                  mode="max", save_last=True)
         callbacks = [
             best_cb,
             # Wall-clock checkpoints so a run killed by a runtime time cap can resume.
-            ModelCheckpoint(
-                dirpath=ckpt_dir,
-                filename="interval",
-                train_time_interval=timedelta(minutes=cfg.ckpt_interval_min),
-                enable_version_counter=False,
-            ),
+            ModelCheckpoint(dirpath=ckpt_dir, filename="interval", enable_version_counter=False,
+                            train_time_interval=timedelta(minutes=cfg.ckpt_interval_min)),
             HeartbeatCallback(heartbeat),
             throughput,
-            sysmetrics,
         ]
         trainer_kwargs = dict(cfg.trainer)
-        budget = time_budget_s(env.max_runtime_s, _process_elapsed_s(), 60 * cfg.stop_margin_min)
+        elapsed = time.time() - psutil.Process().create_time()  # the runtime cap counts from ~here
+        budget = time_budget_s(env.max_runtime_s, elapsed, 60 * cfg.stop_margin_min)
         if budget is not None:
             requested = trainer_kwargs.get("max_time")
             if requested is None or _to_seconds(requested) > budget:
                 trainer_kwargs["max_time"] = timedelta(seconds=budget)
         if cfg.wandb.enabled:
-            trainer_kwargs["logger"] = _wandb_logger(cfg, env, run_id, output_dir)
+            from lightning.pytorch.loggers import WandbLogger
+
+            trainer_kwargs["logger"] = WandbLogger(
+                project=cfg.wandb.project, name=run_id, id=run_id, save_dir=str(output_dir),
+                mode=cfg.wandb.mode if env.has_internet else "offline", resume="allow")
         trainer = L.Trainer(**trainer_kwargs, callbacks=callbacks, default_root_dir=output_dir)
         trainer.fit(module, datamodule=datamodule, ckpt_path=resume or None)
     except BaseException as e:
@@ -151,10 +129,8 @@ def run(cfg: DictConfig, choices: dict[str, str]) -> Path:
              best_val_f1_macro=float(score) if score is not None else None)
     log.close()
 
-    # One clean (undegraded) test-split row per training run, from the best checkpoint.
-    from src.evaluate import evaluate
-
-    # No best.ckpt if training stopped before its first validation (e.g. time budget).
+    # One clean (undegraded) test-split row per training run, from the best checkpoint;
+    # there is no best.ckpt if training stopped before its first validation.
     ckpt = "best" if (ckpt_dir / "best.ckpt").exists() else "last"
     evaluate(str(output_dir), ckpt, OmegaConf.create(CLEAN), "none", [0.0],
              cfg.degradation_seed, results_repo=cfg.get("results_repo"),

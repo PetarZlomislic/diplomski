@@ -1,27 +1,17 @@
 # @package _global_
 # Experiment 1, Stage 1 pilot (pre-analysis §8): 6 arms x 1 seed, small backbone,
-# 15% `sweep` tier. Pick the arm with model=<opt|sar|early|late|gate_global|gate_spatial>.
-#   ./scripts/sweep_hf.sh +experiment=exp1_pilot model=opt,sar,early,late,gate_global,gate_spatial seed=0
-# Identical schedule/optimiser/augmentation for every arm (§6): never override per arm.
+# 15% `sweep` tier. Otherwise identical to exp1.
+#   python scripts/submit.py hf --sweep +experiment=exp1_pilot model=opt,sar,early,late,gate_global,gate_spatial seed=0
 defaults:
-  - override /data: streaming
-  - override /sched: cosine
+  - exp1
+  - _self_
 
 data:
   data_uri: ???              # the 15% tier, e.g. <user>/reben-sweep
-  batch_size: 64
-  num_workers: 4
-  augment: true
 
 model:
   encoder:
     width: 16                # "small backbone"
 
-optim:
-  lr: 1e-3
-  weight_decay: 0.01
-
 trainer:
   max_epochs: 15
-
-degradation_seed: 12345

@@ -6,10 +6,14 @@ import pytest
 import torch
 from hydra.utils import instantiate
 
-from src.degradations.cloud import CloudOcclusion, cloud_mask
-from src.degradations.dropout import ModalityDropout
-from src.degradations.speckle import Speckle, looks
-from src.degradations.temporal import TemporalMisalignment
+from src.degradations import (
+    CloudOcclusion,
+    ModalityDropout,
+    Speckle,
+    TemporalMisalignment,
+    cloud_mask,
+    looks,
+)
 from tests.conftest import compose_cfg
 
 ARMS = ("opt", "sar", "early", "late", "gate_global", "gate_spatial")
@@ -192,10 +196,9 @@ def test_streaming_standardises_with_manifest_stats(tmp_path: Path) -> None:
 
 
 def test_train_flips_are_per_sample_and_shared_across_modalities() -> None:
-    from src.data.base import BaseDataModule
+    from src.data import BaseDataModule
 
-    dm = BaseDataModule()
-    dm.augment = True
+    dm = BaseDataModule(2, {"optical": 3, "sar": 1}, 4, batch_size=64, augment=True)
     torch.manual_seed(0)
     img = torch.arange(16.0).view(1, 1, 4, 4).repeat(64, 1, 1, 1)
     out = dm.prepare_batch({"optical": img.repeat(1, 3, 1, 1), "sar": img.clone(),
@@ -230,7 +233,7 @@ def pilot(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def test_pilot_rows_carry_per_class_flops_and_weights(pilot: Path) -> None:
-    from src.aggregate import load_results
+    from src.analysis import load_results
 
     df = load_results(pilot)
     assert all(len(json.loads(x)) == 19 for x in df["f1_per_class"])
@@ -251,7 +254,7 @@ def test_preflight_wiring_checks_pass_on_pilot(pilot: Path) -> None:
 
 def test_preflight_catches_a_leaking_degradation(pilot: Path, monkeypatch) -> None:
     import src.preflight as pf
-    from src.aggregate import load_results
+    from src.analysis import load_results
 
     df = load_results(pilot)
     rows = (df["model"] == "opt") & (df["degradation"] == "speckle")
@@ -268,12 +271,12 @@ def test_analysis_runs_on_pilot(pilot: Path) -> None:
 
 
 def test_sweep_eval_runs_every_degradation_of_the_stage(trained_run) -> None:
-    from src.aggregate import load_results
-    from src.sweep_eval import sweep
+    from src.analysis import load_results
+    from src.evaluate import sweep
 
     run_dir = trained_run("dummy")
     cfg = compose_cfg(f"run_dir={run_dir.as_posix()}", "stage=pilot",
-                      config_name="sweep_eval")
+                      config_name="evaluate")
     assert sweep(cfg) == sum(len(v) for v in cfg.grids.pilot.values())
     got = load_results(run_dir).groupby("degradation")["severity"].apply(sorted).to_dict()
     for deg, sev in cfg.grids.pilot.items():
@@ -282,7 +285,7 @@ def test_sweep_eval_runs_every_degradation_of_the_stage(trained_run) -> None:
 
 def test_preflight_identity_compares_prepared_batches() -> None:
     """With real band stats, s=0 must equal the PREPARED clean batch (not the raw one)."""
-    from src.data.dummy import DummyDataModule
+    from src.data import DummyDataModule
     from src.preflight import check_identity
 
     dm = DummyDataModule(num_classes=3, in_channels={"optical": 12, "sar": 2}, image_size=8,
@@ -298,7 +301,7 @@ def test_preflight_identity_compares_prepared_batches() -> None:
 
 
 def test_exp1_run_trains_and_sweeps_every_model(tmp_path: Path) -> None:
-    from src.aggregate import load_results
+    from src.analysis import load_results
     from src.exp1_run import main
 
     status = main(["models=[dummy,dummy_wide]", "seeds=[0]", "stage=pilot",

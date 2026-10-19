@@ -1,4 +1,4 @@
-_target_: src.data.dummy.DummyDataModule
+_target_: src.data.DummyDataModule
 num_classes: 19
 in_channels:
   optical: 12

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from src.analysis import analyse, beats, curves, hypotheses, per_run, separable
-from src.results import ResultsRow, append_rows
+from src.evaluate import ResultsRow, append_rows
 
 GRIDS = {"cloud": [0.25, 0.5, 0.75, 1.0], "speckle": [0.25, 0.5, 0.75, 1.0],
          "drop_optical": [1.0], "drop_sar": [1.0], "temporal": [1, 2, 4, 8]}
@@ -51,7 +51,7 @@ def _rows(seeds=(0, 1, 2), slope=SLOPE) -> list[ResultsRow]:
 
 
 def _runs(rows, params=PARAMS) -> pd.DataFrame:
-    from src.results import FIELDNAMES
+    from src.evaluate import FIELDNAMES
 
     df = pd.DataFrame([r.__dict__ for r in rows])[FIELDNAMES]
     runs = per_run(df, curves(df))
@@ -73,7 +73,7 @@ def test_beats_needs_disjoint_ranges_and_two_seeds() -> None:
 
 
 def test_curves_insert_clean_point_and_retention() -> None:
-    from src.results import FIELDNAMES
+    from src.evaluate import FIELDNAMES
 
     df = pd.DataFrame([r.__dict__ for r in _rows()])[FIELDNAMES]
     cv = curves(df)

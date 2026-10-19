@@ -8,6 +8,25 @@ severities: [0.0, 0.25, 0.5, 0.75, 1.0]
 degradation_seed: 12345      # deliberately independent of the training seed
 results_repo: null           # HF dataset repo ("user/name") to push rows to; null = local only
 
+# Experiment 1 sweep: stage=pilot|full evaluates every degradation of that grid instead of
+# `degradation` x `severities`. Severity grids from the pre-analysis (§2.2, §8). The clean
+# point (s=0) is NOT repeated: every training run already wrote its clean `none` row, and
+# the analysis uses it as F1(0).
+stage: null
+grids:
+  pilot:                     # Stage 1: reduced grid {0, .5, 1}
+    cloud: [0.5, 1.0]
+    speckle: [0.5, 1.0]
+    drop_optical: [1.0]
+    drop_sar: [1.0]
+    temporal: [1, 8]
+  full:                      # Stage 2
+    cloud: [0.25, 0.5, 0.75, 1.0]
+    speckle: [0.25, 0.5, 0.75, 1.0]
+    drop_optical: [1.0]
+    drop_sar: [1.0]
+    temporal: [1, 2, 4, 8]
+
 obs:
   heartbeat_s: 30
   jsonl: true                # false: stdout only, no <run dir>/run.jsonl

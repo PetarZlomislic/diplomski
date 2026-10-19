@@ -8,9 +8,8 @@ import pytest
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from src.callbacks.heartbeat import Heartbeat, HeartbeatCallback
-from src.module import LitModule
-from src.obs import RunLog
+from src.obs import Heartbeat, HeartbeatCallback, RunLog
+from src.models import LitModule
 from src.train import run
 from tests.conftest import compose_cfg
 

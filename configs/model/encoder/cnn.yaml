@@ -2,7 +2,7 @@
 # per modality, so all arms start from identical weights (pre-analysis §6).
 # `pretrained`: path to a ConvEncoder state_dict over ALL bands; null = random init from
 # the training seed.
-_target_: src.models.encoders.ConvEncoder
+_target_: src.models.ConvEncoder
 _partial_: true
 width: 32
 depth: 4

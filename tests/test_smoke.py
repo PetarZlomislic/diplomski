@@ -39,7 +39,7 @@ def _eval(run_dir: Path, deg: str, severities: list[float]):
 
 
 def test_evaluate_produces_valid_results_row(trained_run) -> None:
-    from src.results import FIELDNAMES
+    from src.evaluate import FIELDNAMES
 
     run_dir = trained_run("dummy")
     (row,) = _eval(run_dir, "none", [0.0])
@@ -60,7 +60,7 @@ def test_severity_sweep_writes_one_row_each_and_zero_equals_clean(trained_run) -
 
 
 def test_two_model_sweep_aggregates_to_ten_rows_and_one_curve(tmp_path) -> None:
-    from src.aggregate import aggregate
+    from src.analysis import aggregate
     from src.train import run
     from tests.conftest import compose_cfg
 
@@ -138,7 +138,7 @@ def _failing_upload(monkeypatch) -> list:
 
 
 def test_push_rows_failure_warns_instead_of_raising(tmp_path, monkeypatch, caplog) -> None:
-    from src.results import push_rows
+    from src.evaluate import push_rows
 
     calls = _failing_upload(monkeypatch)
     csv = tmp_path / "run" / "results" / "20260101-000000-abcdef.csv"

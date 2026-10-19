@@ -21,6 +21,7 @@ import argparse
 import json
 import statistics
 import sys
+from itertools import islice
 from pathlib import Path
 
 import pandas as pd
@@ -28,17 +29,14 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from src.aggregate import load_results
-from src.evaluate import degraded_batches
-from src.results import RUN_CONFIG
+from src.analysis import DEGRADATIONS, load_results
+from src.evaluate import CONFIG_DIR, RUN_CONFIG, degraded_batches
 
-DEGRADATIONS = ("cloud", "speckle", "drop_optical", "drop_sar", "temporal")
 MAX_SEVERITY = {"cloud": 1.0, "speckle": 1.0, "drop_optical": 1.0, "drop_sar": 1.0,
                 "temporal": 1}
 # config -> degradations that must not move it (they act on a modality it does not use)
 MUST_NOT_MOVE = {"opt": ("speckle", "drop_sar", "temporal"),
                  "sar": ("cloud", "drop_optical")}
-CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
 
 
 def _same(a: dict, b: dict) -> bool:
@@ -55,9 +53,10 @@ def _same(a: dict, b: dict) -> bool:
     return True
 
 
-def _degradation(name: str):
-    cfg = OmegaConf.load(CONFIG_DIR / "degradation" / f"{name}.yaml")
-    return instantiate(cfg)
+def _degradation(name: str, dm):
+    deg = instantiate(OmegaConf.load(CONFIG_DIR / "degradation" / f"{name}.yaml"))
+    deg.bind(dm)
+    return deg
 
 
 def _datamodule(run_dir: Path):
@@ -67,19 +66,13 @@ def _datamodule(run_dir: Path):
 
 
 def _first(it, n: int) -> list:
-    out = []
-    for i, x in enumerate(it):
-        if i >= n:
-            break
-        out.append(x)
-    return out
+    return list(islice(it, n))
 
 
 def check_identity(dm, degradations, n_batches: int, df: pd.DataFrame) -> tuple[str, str]:
     bad = []
     for name in degradations:
-        deg = _degradation(name)
-        deg.bind(dm)
+        deg = _degradation(name, dm)
         clean = [dm.prepare_batch(b) for b in _first(iter(dm.test_dataloader()), n_batches)]
         zero = _first(degraded_batches(dm, deg, 0.0, 12345), n_batches)
         if not all(_same(a, b) for a, b in zip(clean, zero, strict=True)):
@@ -103,12 +96,8 @@ def check_seed(run_dirs: list[Path], degradations, n_batches: int,
     dms = [_datamodule(a_dir), _datamodule(b_dir)]
     bad = []
     for name in degradations:
-        outs = []
-        for dm in dms:
-            deg = _degradation(name)
-            deg.bind(dm)
-            outs.append(_first(degraded_batches(dm, deg, MAX_SEVERITY[name],
-                                                degradation_seed), n_batches))
+        outs = [_first(degraded_batches(dm, _degradation(name, dm), MAX_SEVERITY[name],
+                                        degradation_seed), n_batches) for dm in dms]
         if not all(_same(x, y) for x, y in zip(*outs, strict=True)):
             bad.append(name)
     detail = f"{_model(a_dir)} vs {_model(b_dir)}"

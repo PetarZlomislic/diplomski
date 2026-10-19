@@ -1,6 +1,12 @@
-"""Experiment 1 analysis (docs/experiments/exp1-preanalysis.md §3-§5, §9).
+"""Results analysis.
 
-results dir -> Table 1 (clean, AUDC, AUDC_rel, cost), Table 2 (hypothesis verdicts),
+  python -m src.analysis aggregate outputs   # merged CSV + one degradation-curve plot each
+  python -m src.analysis exp1 outputs        # Experiment 1 tables, verdicts and figures
+
+`aggregate`: every <run>/results/*.csv merged into results_all.csv, plus a curve per
+degradation (mean over seeds, min-max band).
+
+`exp1` (docs/experiments/exp1-preanalysis.md §3-§5, §9): results dir -> Table 1 (clean, AUDC, AUDC_rel, cost), Table 2 (hypothesis verdicts),
 ordering disagreements, Figures 1-3.
 
 Conventions, fixed before any result (see the plan's deviations log):
@@ -21,7 +27,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from src.aggregate import GRID, INK, INK_MUTED, SURFACE, _spread_labels, load_results, model_colors  # noqa: E402,E501
+from src.evaluate import FIELDNAMES, RESULTS_DIR  # noqa: E402
 
 CONFIGS = ("opt", "sar", "early", "late", "gate_global", "gate_spatial")
 FUSION = ("early", "late", "gate_global", "gate_spatial")
@@ -30,6 +36,31 @@ DEGRADATIONS = ("cloud", "speckle", "drop_optical", "drop_sar", "temporal")
 OPTICAL_DEGRADATIONS = ("cloud", "drop_optical")
 H5_RHO = 0.8
 METRIC = "f1_macro"
+METRICS = ["f1_macro", "f1_micro", "accuracy"]
+# Validated categorical palette (light surface), assigned in fixed order, never cycled.
+SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+                 "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+SURFACE, INK, INK_MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
+
+
+def load_results(root: Path) -> pd.DataFrame:
+    files = sorted(p for p in root.rglob("*.csv") if p.parent.name == RESULTS_DIR)
+    if not files:
+        raise FileNotFoundError(f"no results/*.csv under {root}")
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    df = df.reindex(columns=FIELDNAMES)  # files from before a column was added: NaN
+    # Re-evaluating the same checkpoint supersedes earlier rows instead of double-counting.
+    key = ["run_id", "degradation", "severity", "ckpt_kind", "threshold"]
+    df = df.sort_values("timestamp").drop_duplicates(key, keep="last")
+    return df.sort_values(["model", "degradation", "severity"], ignore_index=True)
+
+
+def model_colors(models: list[str]) -> dict[str, str]:
+    """Color follows the model name (sorted), not its rank in a given figure."""
+    names = sorted(set(models))
+    if len(names) > len(SERIES_COLORS):
+        raise ValueError(f"{len(names)} models > {len(SERIES_COLORS)} colors: facet instead")
+    return dict(zip(names, SERIES_COLORS))
 
 
 # ---------------------------------------------------------------- per-run quantities
@@ -269,6 +300,21 @@ def separable(runs: pd.DataFrame) -> bool | None:
 
 # ---------------------------------------------------------------- figures
 
+def _spread_labels(ends: list[list], min_gap: float) -> list[list]:
+    """Nudge end-label y positions apart so converging lines keep readable labels."""
+    ends = sorted(ends, key=lambda e: e[0])
+    for i in range(1, len(ends)):
+        ends[i][0] = max(ends[i][0], ends[i - 1][0] + min_gap)
+    return ends
+
+
+def _save(fig, path: Path, **layout) -> None:
+    fig.tight_layout(**layout)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, facecolor=SURFACE)
+    plt.close(fig)
+
+
 def _style(ax) -> None:
     ax.set_facecolor(SURFACE)
     ax.grid(axis="y", color=GRID, linewidth=0.8)
@@ -315,10 +361,7 @@ def plot_panels(cv: pd.DataFrame, col: str, ylabel: str, title: str, path: Path,
     fig.legend(handles, labels, frameon=False, fontsize=8, labelcolor=INK_MUTED,
                loc="upper right", ncol=len(labels))
     fig.suptitle(title, color=INK, x=0.01, ha="left", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.9))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, facecolor=SURFACE)
-    plt.close(fig)
+    _save(fig, path, rect=(0, 0, 1, 0.9))
 
 
 def plot_h4(runs: pd.DataFrame, path: Path, colors: dict[str, str]) -> None:
@@ -344,10 +387,7 @@ def plot_h4(runs: pd.DataFrame, path: Path, colors: dict[str, str]) -> None:
     _style(ax)
     ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, loc="lower right",
               bbox_to_anchor=(1.0, 1.0), ncol=2, borderaxespad=0.2)
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, facecolor=SURFACE)
-    plt.close(fig)
+    _save(fig, path)
 
 
 # ---------------------------------------------------------------- entrypoint
@@ -390,15 +430,34 @@ def analyse(root: Path, out: Path, metric: str = METRIC) -> dict[str, Path]:
     return files
 
 
+def aggregate(root: Path, out: Path, metric: str = METRIC) -> tuple[pd.DataFrame, list[Path]]:
+    df = load_results(root)
+    out.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out / "results_all.csv", index=False)
+    colors = model_colors(df["model"].tolist())
+    plots = []
+    for deg in sorted(set(df["degradation"]) - {"none"}):
+        plots.append(out / f"curve_{deg}_{metric}.png")
+        plot_panels(df[df["degradation"] == deg], metric, metric, f"{metric} under {deg}",
+                    plots[-1], colors)
+    return df, plots
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("command", choices=["aggregate", "exp1"])
     ap.add_argument("root", type=Path, help="directory searched for <run>/results/*.csv")
-    ap.add_argument("--out", type=Path, default=None, help="default: <root>/analysis")
-    ap.add_argument("--metric", default=METRIC, choices=["f1_macro", "f1_micro", "accuracy"])
+    ap.add_argument("--out", type=Path, default=None,
+                    help="default: <root>/aggregate or <root>/analysis")
+    ap.add_argument("--metric", default=METRIC, choices=METRICS)
     args = ap.parse_args()
+    if args.command == "aggregate":
+        df, plots = aggregate(args.root, args.out or args.root / "aggregate", args.metric)
+        print(f"{len(df)} rows; plots: {', '.join(str(p) for p in plots) or 'none'}")
+        return
     files = analyse(args.root, args.out or args.root / "analysis", args.metric)
-    print((files["summary"]).read_text())
+    print(files["summary"].read_text())
     print("\n".join(f"{k}: {v}" for k, v in files.items()))
 
 

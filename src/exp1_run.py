@@ -3,10 +3,10 @@
   python -m src.exp1_run models=[opt,sar,early,late,gate_global,gate_spatial] seeds=[0] \
       stage=pilot "train=[+experiment=exp1_pilot,data.data_uri=peroz1/reben-sweep]"
 
-Made for runtimes where one long session is cheaper than many jobs (Kaggle: 9 h cap, the
-time budget in src.train still applies to every run). Arguments are key=value pairs:
+Made for runtimes where one long session is cheaper than many jobs (the time budget in
+src.train still applies to every run). Arguments are key=value pairs:
   models  list of model config names          seeds  list of training seeds
-  stage   sweep grid in configs/sweep_eval.yaml (pilot|full|none)
+  stage   sweep grid in configs/evaluate.yaml (pilot|full|none)
   train   extra Hydra overrides for every training run
 A run that fails is logged and the next one starts; the exit status is non-zero if any did.
 """
@@ -28,7 +28,7 @@ def _event(event: str, **fields) -> None:
 def main(argv: list[str]) -> int:
     from hydra import compose, initialize_config_dir
 
-    from src.sweep_eval import CONFIG_DIR, sweep
+    from src.evaluate import CONFIG_DIR, sweep
     from src.train import run
 
     args = OmegaConf.from_dotlist(argv)
@@ -48,9 +48,8 @@ def main(argv: list[str]) -> int:
                     cfg = compose("config", overrides=[*extra, f"model={model}", f"seed={seed}"])
                     run_dir = run(cfg, {"model": model, "data": "streaming"})
                     if stage != "none":
-                        sw = compose("sweep_eval", overrides=[f"run_dir={run_dir.as_posix()}",
-                                                              f"stage={stage}"])
-                        sweep(sw)
+                        sweep(compose("evaluate", overrides=[f"run_dir={run_dir.as_posix()}",
+                                                             f"stage={stage}"]))
                 _event("exp1_run_done", model=model, seed=seed, run_dir=str(run_dir))
             except Exception as e:  # keep going: one broken arm must not cost the session
                 traceback.print_exc()

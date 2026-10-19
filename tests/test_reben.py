@@ -9,7 +9,7 @@ import pytest
 from litdata import StreamingDataset
 from safetensors.numpy import save as st_save
 
-from src.data import reben
+import src.prepare_data as reben
 
 NATIVE = {b: 120 for b in ("B02", "B03", "B04", "B08")}
 NATIVE.update({b: 60 for b in ("B05", "B06", "B07", "B8A", "B11", "B12")})
@@ -50,14 +50,14 @@ def fake_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def test_records_follow_the_record_contract(fake_root: Path) -> None:
-    recs = reben.load_records(fake_root)
+    recs = reben.load_reben(fake_root)
     assert len(recs) == 3 * 36
     assert {r["split"] for r in recs} == {"train", "val", "test"}
     assert recs[0]["label"].shape == (19,) and recs[0]["label"].sum() == 19
 
 
 def test_patch_load_resamples_to_120_and_keeps_dtypes(fake_root: Path) -> None:
-    r = reben.load_records(fake_root)[0]
+    r = reben.load_reben(fake_root)[0]
     opt, sar = r["optical"].load(), r["sar"].load()
     assert opt.shape == (12, 120, 120) and opt.dtype == np.uint16
     assert sar.shape == (2, 120, 120) and sar.dtype == np.float32

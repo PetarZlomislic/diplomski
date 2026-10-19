@@ -4,7 +4,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from src.evaluate import degraded_batches
-from src.module import LitModule
+from src.models import LitModule
 from tests.conftest import compose_cfg
 
 

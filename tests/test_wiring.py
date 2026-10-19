@@ -1,7 +1,7 @@
 import torch
 from hydra.utils import instantiate
 
-from src.models.fusion.passthrough import PassthroughFusion
+from src.models import DummyModel
 
 
 def _batch(cfg, b: int = 3) -> dict[str, torch.Tensor]:
@@ -26,26 +26,21 @@ def test_num_classes_change_changes_output_dim_without_code_edit(make_cfg) -> No
 
 
 def test_nested_fusion_group_resolves(make_cfg) -> None:
-    cfg = make_cfg("model/fusion=passthrough")
-    assert cfg.model.fusion._target_.endswith("PassthroughFusion")
-    assert isinstance(instantiate(cfg.model).fusion, PassthroughFusion)
+    cfg = make_cfg("model=late", "model/fusion=gate_global")
+    assert cfg.model.fusion._target_.endswith("GlobalGateFusion")
+    assert type(instantiate(cfg.model).fusion).__name__ == "GlobalGateFusion"
 
 
-def test_fusion_handles_none_modality() -> None:
-    fusion = PassthroughFusion({"optical": 4, "sar": 2})
-    out = fusion({"optical": torch.randn(5, 4), "sar": None})
-    assert out.shape == (5, 6)
-    assert torch.all(out[:, 4:] == 0)
-
-
-def test_single_modality_passes_through() -> None:
-    x = torch.randn(5, 4)
-    assert torch.equal(PassthroughFusion({"optical": 4})({"optical": x}), x)
+def test_dummy_zero_fills_a_dropped_modality() -> None:
+    model = DummyModel(3, {"optical": 4, "sar": 2}, 8)
+    x = torch.randn(5, 4, 8, 8)
+    want = model.head(torch.cat([x.mean(dim=(2, 3)), torch.zeros(5, 2)], 1))
+    assert torch.equal(model({"optical": x, "sar": None}), want)
 
 
 def test_evaluate_reconstructs_model_without_model_override(trained_run, make_cfg) -> None:
     from src.evaluate import resolve_ckpt
-    from src.module import LitModule
+    from src.models import LitModule
 
     run_dir = trained_run("dummy_wide")
     ckpt_path, _, _ = resolve_ckpt("best", str(run_dir))
