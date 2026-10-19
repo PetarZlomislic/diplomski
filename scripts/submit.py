@@ -52,6 +52,10 @@ REPO = r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"
 UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
 
 
+class NoCredit(Exception):
+    """HF Jobs refused the job: the account's pre-paid credit is used up (402)."""
+
+
 def die(msg: str) -> None:
     raise SystemExit(f"error: {msg}")
 
@@ -173,6 +177,8 @@ def submit_hf(a: argparse.Namespace, overrides: list[str]) -> str | None:
     print(res.stdout, end="")
     if res.returncode:
         print(res.stderr, file=sys.stderr)
+        if "402" in res.stderr or "credit balance is insufficient" in res.stderr:
+            raise NoCredit(res.stderr)
         die(f"hf jobs exited with {res.returncode}")
     # The --json result carries the job URL .../jobs/<owner>/<id>; take owner/id from it only,
     # never from other hex strings in the output (e.g. the pinned commit in the script URL).
@@ -327,8 +333,33 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
     hf = plan.hf_options(api)
     for o in hf:
         o.why_not = hf_unusable(api)
-    ranked = plan.plan(w, [kaggle, *hf], a.time_value, a.deadline and seconds(a.deadline) / 3600,
-                       timeout_h, need_disk, need_ram)
+    deadline_h = a.deadline and seconds(a.deadline) / 3600
+    timeout_given = a.timeout
+    while True:
+        ranked = plan.plan(w, [kaggle, *hf], a.time_value, deadline_h, timeout_h, need_disk,
+                           need_ram)
+        show_plan(ranked, a, w, data_gb)
+        best = ranked[0]
+        if best.why_not:
+            die("nothing can run this job right now")
+        a.min_free_gb = round(need_disk) if repos else None
+        a.gpu = w.gpu
+        a.timeout = timeout_given or (plan.suggested_timeout(best.hours) if w.modelled
+                                      else None)
+        if best.name == "kaggle":
+            return submit_kaggle(a, overrides)
+        a.flavor = best.name
+        try:
+            (sweep_hf if a.sweep else submit_hf)(a, overrides)
+            return 0
+        except NoCredit:  # the API does not expose the balance, so this is how we learn it
+            print("HF Jobs: pre-paid credit used up (402); re-planning without HF Jobs")
+            for o in hf:
+                o.why_not = "no HF Jobs credit (402 Payment Required)"
+
+
+def show_plan(ranked, a: argparse.Namespace, w, data_gb: float) -> None:
+    import plan
 
     runs = [r for j in w.jobs if j for r in j]
     print(f"job: {len(w.jobs)} job(s), {len(runs)} run(s), "
@@ -336,7 +367,7 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
           f"{'GPU' if w.gpu else 'CPU'}, data {data_gb:.1f} GB; "
           f"an hour of waiting is worth ${a.time_value:g}"
           + ("" if w.modelled else "; no speed model for this entry: priced at --timeout"))
-    print(f"     {'option':<16}{'time':>9}{'cost':>9}{'score':>9}  ")
+    print(f"     {'option':<16}{'time':>9}{'cost':>9}{'score':>9}")
     for o in ranked:
         if o.why_not == "no GPU":
             continue  # a GPU job: CPU flavors are not candidates
@@ -349,23 +380,12 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
         print(f"  {'->' if 'pick' in o.tags else '  '} {o.name:<16}{plan.fmt_h(o.hours):>9}"
               f"{cost:>9}{score:>9}  {spec}{tags}")
     best = ranked[0]
-    if best.why_not:
-        die("nothing can run this job right now")
     room = best.vcpu - plan.WORKER_RESERVED_VCPU
     few = [r.workers for r in runs if r.workers < room]
-    if best.loader_bound and few:
+    if not best.why_not and best.loader_bound and few:
         print(f"hint: {best.name} has {best.vcpu} vCPUs but runs use data.num_workers={min(few)}; "
               f"data.num_workers={room} would load faster (it may change the sample order, so "
               "keep it identical across arms)")
-    a.min_free_gb = round(need_disk) if repos else None
-    a.gpu = w.gpu
-    if w.modelled and not a.timeout:
-        a.timeout = plan.suggested_timeout(best.hours)
-    if best.name == "kaggle":
-        return submit_kaggle(a, overrides)
-    a.flavor = best.name
-    (sweep_hf if a.sweep else submit_hf)(a, overrides)
-    return 0
 
 
 # ---------------------------------------------------------------- watch
@@ -534,6 +554,7 @@ def watch(a: argparse.Namespace) -> None:
 # ---------------------------------------------------------------- CLI
 
 def main(argv: list[str]) -> int:
+    sys.stdout.reconfigure(line_buffering=True)  # keep our lines in order with the CLIs'
     load_env(ROOT / ".env")
     command = argv[0] if argv else ""
     ap = argparse.ArgumentParser(prog=f"submit.py {command}", description=__doc__,

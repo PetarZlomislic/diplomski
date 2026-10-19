@@ -337,3 +337,23 @@ def test_auto_runs_cpu_jobs_on_cpu(submit, fake_cloud, repo: Path) -> None:
     (cmd,) = _hf_commands(submit("auto", "--dry-run", "--entry", "prepare_data", "--",
                                  "--source", "reben"))
     assert _has(cmd, "--flavor", "cpu-xl")  # 500 GB disk, 100 GB RAM; priced at --timeout
+
+
+def test_auto_replans_without_hf_when_credit_is_used_up(submit, fake_cloud, monkeypatch) -> None:
+    calls, inner = [], submit.mod.subprocess.run
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0].endswith("hf"):
+            return subprocess.CompletedProcess(cmd, 1, "", "402 Payment Required: Pre-paid "
+                                               "credit balance is insufficient")
+        if cmd[:3] in (["kaggle", "kernels", "push"], ["kaggle", "kernels", "logs"],
+                       ["kaggle", "kernels", "output"]):
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return inner(cmd, **kw)
+
+    monkeypatch.setattr(submit.mod.subprocess, "run", run)
+    out = submit("auto", "--time-value", "50", *PILOT, "model=opt")  # would pick h200
+    assert "re-planning without HF Jobs" in out and "no HF Jobs credit" in out
+    assert _picked(out.split("re-planning")[1]) == "kaggle"
+    assert any(c[:3] == ["kaggle", "kernels", "push"] for c in calls)

@@ -201,6 +201,7 @@ def plan(w: Work, options: list[Option], time_value: float, deadline_h: float | 
     """Options ranked best first; unusable ones last, with why_not set."""
     for o in options:
         predict(w, o, timeout_h)
+        o.tags = []
         if o.why_not:
             continue
         if w.gpu and o.gpu is None:
