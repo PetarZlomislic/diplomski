@@ -369,7 +369,7 @@ def show_plan(ranked, a: argparse.Namespace, w, data_gb: float) -> None:
           + ("" if w.modelled else "; no speed model for this entry: priced at --timeout"))
     print(f"     {'option':<16}{'time':>9}{'cost':>9}{'score':>9}")
     for o in ranked:
-        if o.why_not == "no GPU":
+        if w.gpu and o.gpu is None:
             continue  # a GPU job: CPU flavors are not candidates
         if o.why_not:
             print(f"     {o.name:<16}{'':>27}  {o.why_not}")
