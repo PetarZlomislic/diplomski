@@ -51,7 +51,8 @@ def hf_token() -> str | None:
         from kaggle_secrets import UserSecretsClient
 
         return UserSecretsClient().get_secret("HF_TOKEN")
-    except Exception:  # not attached, or not on Kaggle
+    except Exception as e:  # not attached, or not on Kaggle
+        log("hf_token_unavailable", error=f"{type(e).__name__}: {e}"[:300])
         return None
 
 
