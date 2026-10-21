@@ -240,12 +240,19 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
     os.environ["PYTHONUTF8"] = "1"  # the Kaggle CLI crashes printing non-ASCII on Windows
     subprocess.run(push, check=True)
     print(f"pushed {kernel}; polling every 30s")
+    status = ""
     while True:
         res = subprocess.run(["kaggle", "kernels", "status", kernel], capture_output=True,
                              text=True)
-        status = (res.stdout + res.stderr).strip()
-        print(f"{time.strftime('%H:%M:%S', time.gmtime())} {status}")
-        if re.search(r"complete|error|cancel", status, re.IGNORECASE):
+        m = re.search(r"KernelWorkerStatus\.(\w+)", res.stdout)
+        now = time.strftime("%H:%M:%S", time.gmtime())
+        if not m:  # network blip or CLI error: the kernel keeps running, so keep polling
+            err = (res.stderr or res.stdout).strip()[-120:]
+            print(f"{now} status unavailable, retrying: {err}")
+        elif m[1] != status:
+            status = m[1]
+            print(f"{now} {kernel}: {status}")
+        if status in ("COMPLETE", "ERROR", "CANCEL_REQUESTED", "CANCEL_ACKNOWLEDGED"):
             break
         time.sleep(30)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -256,7 +263,7 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
     except subprocess.TimeoutExpired:
         print("warning: output download timed out", file=sys.stderr)
     print(f"outputs: {out_dir} (execution log: {out_dir / 'kernel_log.json'})")
-    return 0 if re.search("complete", status, re.IGNORECASE) else 1
+    return 0 if status == "COMPLETE" else 1
 
 
 # ---------------------------------------------------------------- auto: speed vs price
@@ -316,8 +323,9 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
     api = HfApi(token=os.environ.get("HF_TOKEN"))
     combos = expand(overrides) if a.sweep else [overrides]
     repos = sorted({r for c in combos for r in datasets(c, a.data).split()})
-    data_gb = sum((s.size or 0) for r in repos
-                  for s in api.dataset_info(r, files_metadata=True).siblings) / 1e9
+    infos = {r: api.dataset_info(r, files_metadata=True) for r in repos}
+    data_gb = sum((s.size or 0) for i in infos.values() for s in i.siblings) / 1e9
+    private = [r for r, i in infos.items() if i.private]
     w = plan.Work([plan.job_runs(a.entry, c, repos, api) for c in combos], data_gb)
     if a.gpu is not None:
         for r in (r for j in w.jobs if j for r in j):
@@ -347,6 +355,9 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
         a.timeout = timeout_given or (plan.suggested_timeout(best.hours) if w.modelled
                                       else None)
         if best.name == "kaggle":
+            if private:  # Kaggle cannot say whether a secret is attached, so only warn
+                print(f"note: {', '.join(private)} is private: the kernel needs the Kaggle "
+                      "Secret HF_TOKEN attached (kernel page -> Add-ons -> Secrets)")
             return submit_kaggle(a, overrides)
         a.flavor = best.name
         try:

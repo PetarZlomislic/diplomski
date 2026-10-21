@@ -264,7 +264,8 @@ class _FakeHub:
                 _hw("h200", 5.0, 23, "3000 GB", "256 GB", gpu="H200")]
 
     def dataset_info(self, repo, files_metadata):
-        return types.SimpleNamespace(siblings=[types.SimpleNamespace(size=41.5e9)])
+        return types.SimpleNamespace(siblings=[types.SimpleNamespace(size=41.5e9)],
+                                     private=True)
 
     def hf_hub_download(self, repo, filename, repo_type):
         return str(self.manifest)
@@ -287,7 +288,11 @@ def fake_cloud(submit, monkeypatch, tmp_path):
                                "refreshAt": "2026-10-24T00:00:00"}])
             return subprocess.CompletedProcess(cmd, 0, out, "")
         if cmd[:3] == ["kaggle", "kernels", "status"]:
-            return subprocess.CompletedProcess(cmd, 0, 'has status "COMPLETE"', "")
+            state["polls"] = state.get("polls", 0) + 1
+            if state["polls"] == 2:  # a network blip while polling must not end the wait
+                return subprocess.CompletedProcess(cmd, 1, "", "NameResolutionError")
+            return subprocess.CompletedProcess(
+                cmd, 0, 'has status "KernelWorkerStatus.COMPLETE"', "")
         return real_run(cmd, **kw)
 
     monkeypatch.setattr(submit.mod.subprocess, "run", fake_run)
@@ -300,7 +305,7 @@ def _picked(out: str) -> str:
 
 def test_auto_time_value_trades_free_kaggle_for_speed(submit, fake_cloud) -> None:
     out = submit("auto", "--dry-run", "--time-value", "0", *PILOT, "model=opt")
-    assert _picked(out) == "kaggle"
+    assert _picked(out) == "kaggle" and "needs the Kaggle Secret HF_TOKEN" in out
     out = submit("auto", "--dry-run", "--time-value", "50", *PILOT, "model=opt")
     assert _picked(out) == "h200"
     (cmd,) = _hf_commands(out)
@@ -353,7 +358,10 @@ def test_auto_replans_without_hf_when_credit_is_used_up(submit, fake_cloud, monk
         return inner(cmd, **kw)
 
     monkeypatch.setattr(submit.mod.subprocess, "run", run)
+    monkeypatch.setattr(submit.mod.time, "sleep", lambda s: None)
     out = submit("auto", "--time-value", "50", *PILOT, "model=opt")  # would pick h200
     assert "re-planning without HF Jobs" in out and "no HF Jobs credit" in out
     assert _picked(out.split("re-planning")[1]) == "kaggle"
     assert any(c[:3] == ["kaggle", "kernels", "push"] for c in calls)
+    # The blip while polling is retried; the run still ends on the real COMPLETE status.
+    assert "status unavailable, retrying" in out and "acme/rob-train: COMPLETE" in out

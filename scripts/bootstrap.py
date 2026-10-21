@@ -84,10 +84,14 @@ def download(uv: list[str], root: Path, base: Path, repos: list[str]) -> Path:
         env["HF_TOKEN"] = token
     for repo in repos:
         t0 = time.monotonic()
-        log("dataset_download_start", repo=repo, dest=str(base / repo))
-        subprocess.run([*uv, "run", "--frozen", "hf", "download", repo, "--repo-type",
-                        "dataset", "--local-dir", str(base / repo)], cwd=root, env=env,
-                       check=True, stdout=subprocess.DEVNULL)
+        log("dataset_download_start", repo=repo, dest=str(base / repo), token=bool(token))
+        res = subprocess.run([*uv, "run", "--frozen", "hf", "download", repo, "--repo-type",
+                              "dataset", "--local-dir", str(base / repo)], cwd=root, env=env,
+                             stdout=subprocess.DEVNULL)
+        if res.returncode:
+            hint = ("" if token else " No HF token: a private dataset needs one (on Kaggle: "
+                    "Add-ons -> Secrets -> HF_TOKEN, attached to this kernel).")
+            raise SystemExit(f"downloading {repo} failed (exit {res.returncode}).{hint}")
         size = sum(f.stat().st_size for f in (base / repo).rglob("*") if f.is_file())
         log("dataset_download_done", repo=repo, gb=round(size / 1e9, 1),
             seconds=round(time.monotonic() - t0))
