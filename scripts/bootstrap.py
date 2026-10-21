@@ -52,7 +52,9 @@ def hf_token() -> str | None:
 
         return UserSecretsClient().get_secret("HF_TOKEN")
     except Exception as e:  # not attached, or not on Kaggle
-        log("hf_token_unavailable", error=f"{type(e).__name__}: {e}"[:300])
+        # Names only, never values: attached secrets show up as KAGGLE_USER_SECRETS_* vars.
+        log("hf_token_unavailable", error=f"{type(e).__name__}: {e}"[:300],
+            kaggle_env=sorted(k for k in os.environ if k.startswith("KAGGLE_")))
         return None
 
 
