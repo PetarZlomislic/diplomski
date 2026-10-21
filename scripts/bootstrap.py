@@ -53,7 +53,16 @@ def hf_token() -> str | None:
         return UserSecretsClient().get_secret("HF_TOKEN")
     except Exception as e:  # not attached, or not on Kaggle
         # Names only, never values: attached secrets show up as KAGGLE_USER_SECRETS_* vars.
+        # The client reports HTTP refusals (e.g. a secret not attached) as a ConnectionError;
+        # the HTTP status and body are on the chained cause.
+        cause = e.__cause__
+        detail = getattr(cause, "code", None), getattr(cause, "reason", None)
+        try:
+            body = cause.read().decode()[:300] if hasattr(cause, "read") else None
+        except Exception:
+            body = None
         log("hf_token_unavailable", error=f"{type(e).__name__}: {e}"[:300],
+            cause=f"{type(cause).__name__}: {detail}" if cause else None, body=body,
             kaggle_env=sorted(k for k in os.environ if k.startswith("KAGGLE_")))
         return None
 
