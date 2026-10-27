@@ -214,6 +214,8 @@ python scripts/submit.py kaggle --kernel <user>/other-slug model=dummy_wide trai
 
 The script stamps the commit, `RUN_ENV=kaggle` and your overrides into a copy of `scripts/bootstrap.py` (Kaggle runs a single code file), then pushes it as a GPU + internet kernel. It polls every 30 s and finally downloads into `outputs/kaggle/<kernel>/<sha>/`: the run directory (`/kaggle/working/<run_id>/`), the Kaggle log, and `kernel_log.json`. The kernel runs in its own `uv sync --frozen` environment rather than on Kaggle's preinstalled packages, which conflict with the pinned versions.
 
+**Datasets on Kaggle.** A kernel downloads Hub datasets itself, which for a private repo needs the Kaggle Secret `HF_TOKEN`, and runs pushed through the API have not received it reliably. Instead, upload a private Kaggle copy of the tier once and map it in `.env`: `KAGGLE_MIRRORS=peroz1/reben-sweep=petarzlomislic/reben-sweep`. Kaggle runs then attach the copy (mounted, not downloaded, no token) and expose it where the download would have gone, so `data.data_uri=peroz1/reben-sweep` stays unchanged. HF Jobs ignore the mapping.
+
 Kaggle sessions have a hard 9 h limit; the time budget (§3) stops cleanly before it. Each push replaces the kernel's previous version, so use a different `--kernel` for parallel runs.
 
 ### Best speed/price trade-off: `auto`

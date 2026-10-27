@@ -77,6 +77,8 @@ class Option:
     disk_gb: float
     ram_gb: float
     overhead_s: float
+    download_gb: float | None = None  # None: the job's datasets; Kaggle mirrors need none
+    need_disk: float | None = None  # None: the job's disk need
     why_not: str | None = None
     hours: float = 0.0
     cost: float = 0.0
@@ -192,7 +194,8 @@ def job_hours(runs: list[RunWork] | None, data_gb: float, o: Option, timeout_h: 
 def predict(w: Work, o: Option, timeout_h: float) -> None:
     """o.hours: wall time until the slowest job ends (a sweep's jobs run in parallel);
     o.cost: all jobs; o.loader_bound: data loading, not the GPU, limits some run."""
-    hours = [job_hours(j, w.data_gb, o, timeout_h) for j in w.jobs]
+    gb = w.data_gb if o.download_gb is None else o.download_gb
+    hours = [job_hours(j, gb, o, timeout_h) for j in w.jobs]
     o.hours, o.cost = max(hours), o.price_h * sum(hours)
 
 
@@ -206,8 +209,8 @@ def plan(w: Work, options: list[Option], time_value: float, deadline_h: float | 
             continue
         if w.gpu and o.gpu is None:
             o.why_not = "no GPU"
-        elif o.disk_gb < need_disk:
-            o.why_not = f"{o.disk_gb:.0f} GB disk < {need_disk:.0f} GB needed"
+        elif o.disk_gb < (need := need_disk if o.need_disk is None else o.need_disk):
+            o.why_not = f"{o.disk_gb:.0f} GB disk < {need:.0f} GB needed"
         elif o.ram_gb < need_ram:
             o.why_not = f"{o.ram_gb:.0f} GB RAM < {need_ram:.0f} GB needed"
         elif deadline_h is not None and o.hours > deadline_h:

@@ -110,6 +110,24 @@ def download(uv: list[str], root: Path, base: Path, repos: list[str]) -> Path:
     return base
 
 
+def link_mirrors(base: Path, mirrors: dict[str, str]) -> None:
+    """Expose each attached Kaggle dataset (a copy of a Hub dataset repo) at
+    <base>/<hub owner>/<hub name>, where a download would have put it, so the experiment's
+    data.data_uri=<hub owner>/<hub name> is unchanged. No token, nothing copied."""
+    for repo, kaggle_ref in mirrors.items():
+        name = kaggle_ref.split("/")[-1]
+        found = [p.parent for p in sorted((KAGGLE / "input").glob("**/manifest.json"))
+                 if name in p.parent.parts]
+        if not found:
+            raise SystemExit(f"Kaggle dataset {kaggle_ref} (mirror of {repo}) is not under "
+                             "/kaggle/input: is it attached to the kernel?")
+        link = base / repo
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if not link.exists():
+            link.symlink_to(found[0], target_is_directory=True)
+        log("dataset_mounted", repo=repo, kaggle=kaggle_ref, path=str(found[0]))
+
+
 def main() -> int:
     slug, sha, entry = setting("REPO_SLUG"), setting("REPO_SHA"), setting("ENTRY", "train")
     overrides = sys.argv[1:]
@@ -129,8 +147,11 @@ def main() -> int:
     env = os.environ | {"REPO_SHA": sha, "PYTHONUNBUFFERED": "1"}
     if STAMPED:
         env |= {"RUN_ENV": "kaggle", "HYDRA_OVERRIDES": setting("HYDRA_OVERRIDES")}
+    base = dest / "datasets" if KAGGLE.exists() else Path("/datasets")
+    if mirrors := dict(m.split("=", 1) for m in setting("KAGGLE_MIRRORS").split()):
+        link_mirrors(base, mirrors)
+        env["DATA_ROOT"] = str(base)
     if repos := setting("DATASETS").split():
-        base = dest / "datasets" if KAGGLE.exists() else Path("/datasets")
         env["DATA_ROOT"] = str(download(uv, root, base, repos))
     cmd = [*uv, "run", "--frozen", "--extra", "logging", "python", "-m", f"src.{entry}",
            *overrides]

@@ -30,7 +30,9 @@ the job's disk before the entrypoint (mind the flavor's disk: a10g-small has 110
 Evaluation jobs read data_uri from the run config, so pass --data for them.
 The tree must be clean (the job runs HEAD), unless --allow-dirty. Settings come from the
 environment or a gitignored .env (the environment wins): HF_BUCKET, HF_TOKEN, WANDB_API_KEY
-(forwarded when set), KAGGLE_KERNEL, REPO_SLUG (default: from the origin remote).
+(forwarded when set), KAGGLE_KERNEL, REPO_SLUG (default: from the origin remote), and
+KAGGLE_MIRRORS="<hub repo>=<kaggle dataset> ...": private Kaggle copies of Hub datasets that
+a Kaggle kernel mounts instead of downloading (no HF token needed in the kernel).
 """
 import argparse
 import concurrent.futures as cf
@@ -136,6 +138,12 @@ def expand(overrides: list[str]) -> list[list[str]]:
     return [list(c) for c in itertools.product(*axes)]
 
 
+def kaggle_mirrors() -> dict[str, str]:
+    """KAGGLE_MIRRORS="<hub repo>=<kaggle dataset> ...": private Kaggle copies of Hub datasets.
+    Attached to the kernel instead of downloaded, so the kernel needs no HF token."""
+    return dict(m.split("=", 1) for m in os.environ.get("KAGGLE_MIRRORS", "").split())
+
+
 def default_timeout(a: argparse.Namespace) -> str:
     return a.timeout or ("24h" if a.entry == "prepare_data" else "4h")
 
@@ -209,9 +217,12 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
         if not a.dry_run:
             die("set KAGGLE_KERNEL=<user>/<slug> or pass --kernel")
         kernel = f"<KAGGLE_USER>/robustness-eval-{a.entry}"
+    repos, mirrors = datasets(overrides, a.data).split(), kaggle_mirrors()
+    mirrored = {r: mirrors[r] for r in repos if r in mirrors}
     stamp = {"REPO_SLUG": slug, "REPO_SHA": sha, "ENTRY": a.entry,
              "HYDRA_OVERRIDES": shlex.join(overrides),  # split again by src/env.py
-             "DATASETS": datasets(overrides, a.data),
+             "DATASETS": " ".join(r for r in repos if r not in mirrored),
+             "KAGGLE_MIRRORS": " ".join(f"{r}={k}" for r, k in mirrored.items()),
              "MIN_FREE_GB": str(getattr(a, "min_free_gb", None) or "")}
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", kernel)
     build = ROOT / "outputs" / "kaggle_build" / safe
@@ -223,14 +234,15 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
     meta = {"id": kernel, "title": kernel.split("/")[-1], "code_file": "run.py",
             "language": "python", "kernel_type": "script", "is_private": True,
             "enable_gpu": getattr(a, "gpu", None) is not False, "enable_internet": True,
-            "dataset_sources": [],
+            "dataset_sources": sorted(set(mirrored.values())),
             "competition_sources": [], "kernel_sources": [], "model_sources": []}
     (build / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     out_dir = ROOT / "outputs" / "kaggle" / safe / sha
     push = ["kaggle", "kernels", "push", "-p", str(build)]
     if a.dry_run:
         print(f"# kernel {kernel} at {slug}@{sha}, RUN_ENV=kaggle "
-              f"HYDRA_OVERRIDES={stamp['HYDRA_OVERRIDES']} DATASETS={stamp['DATASETS']}")
+              f"HYDRA_OVERRIDES={stamp['HYDRA_OVERRIDES']} DATASETS={stamp['DATASETS']}"
+              + (f" KAGGLE_MIRRORS={stamp['KAGGLE_MIRRORS']}" if mirrored else ""))
         for c in (push, ["kaggle", "kernels", "status", kernel],
                   ["kaggle", "kernels", "output", kernel, "-p", str(out_dir)]):
             print(shlex.join(c))
@@ -336,8 +348,10 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
     combos = expand(overrides) if a.sweep else [overrides]
     repos = sorted({r for c in combos for r in datasets(c, a.data).split()})
     infos = {r: api.dataset_info(r, files_metadata=True) for r in repos}
-    data_gb = sum((s.size or 0) for i in infos.values() for s in i.siblings) / 1e9
-    private = [r for r, i in infos.items() if i.private]
+    gb = {r: sum((s.size or 0) for s in i.siblings) / 1e9 for r, i in infos.items()}
+    data_gb = sum(gb.values())
+    unmirrored = [r for r in repos if r not in kaggle_mirrors()]  # Kaggle must download these
+    private = [r for r in unmirrored if infos[r].private]
     w = plan.Work([plan.job_runs(a.entry, c, repos, api) for c in combos], data_gb)
     if a.gpu is not None:
         for r in (r for j in w.jobs if j for r in j):
@@ -348,6 +362,9 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
     timeout_h = seconds(default_timeout(a)) / 3600
 
     kaggle = plan.kaggle_option()
+    kaggle.download_gb = sum(gb[r] for r in unmirrored)
+    if not prep:
+        kaggle.need_disk = kaggle.download_gb + JOB_OVERHEAD_GB
     plan.predict(w, kaggle, timeout_h)
     kaggle.why_not = kaggle_unusable(a, w, kaggle.hours)
     hf = plan.hf_options(api)
@@ -363,7 +380,8 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
         best = ranked[0]
         if best.why_not:
             die("nothing can run this job right now")
-        a.min_free_gb = round(need_disk) if repos else None
+        a.min_free_gb = (round(need_disk) if best.name != "kaggle" and repos else
+                         round(kaggle.need_disk) if unmirrored else None)
         a.gpu = w.gpu
         a.timeout = timeout_given or (plan.suggested_timeout(best.hours) if w.modelled
                                       else None)

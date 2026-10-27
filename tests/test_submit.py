@@ -366,3 +366,32 @@ def test_auto_replans_without_hf_when_credit_is_used_up(submit, fake_cloud, monk
     assert any(c[:3] == ["kaggle", "kernels", "push"] for c in calls)
     # The blip while polling is retried; the run still ends on the real COMPLETE status.
     assert "status unavailable, retrying" in out and "acme/rob-train: COMPLETE" in out
+
+
+def test_kaggle_mirror_is_attached_instead_of_downloaded(submit, repo: Path) -> None:
+    out = submit("kaggle", "--dry-run", "data.data_uri=acme/sweep", "model=opt",
+                 KAGGLE_MIRRORS="acme/sweep=me/sweep-copy")
+    assert "KAGGLE_MIRRORS=acme/sweep=me/sweep-copy" in out
+    build = repo / "outputs" / "kaggle_build" / "acme_rob-train"
+    meta = json.loads((build / "kernel-metadata.json").read_text())
+    assert meta["dataset_sources"] == ["me/sweep-copy"]
+    ns: dict = {}
+    exec(compile((build / "run.py").read_text(), "run.py", "exec"), ns)
+    assert ns["STAMPED"]["DATASETS"] == "" and ns["STAMPED"]["KAGGLE_MIRRORS"] == \
+        "acme/sweep=me/sweep-copy"
+    # The experiment's own override is passed through unchanged.
+    assert "data.data_uri=acme/sweep" in ns["STAMPED"]["HYDRA_OVERRIDES"]
+
+
+def test_auto_with_a_mirror_needs_no_token_and_no_download(submit, fake_cloud) -> None:
+    plain = submit("auto", "--dry-run", "--time-value", "0", *PILOT, "model=opt")
+    mirrored = submit("auto", "--dry-run", "--time-value", "0", *PILOT, "model=opt",
+                      KAGGLE_MIRRORS="acme/sweep=me/sweep-copy")
+    assert "needs the Kaggle Secret HF_TOKEN" in plain
+    assert "needs the Kaggle Secret" not in mirrored and _picked(mirrored) == "kaggle"
+
+    def kaggle_minutes(out: str) -> float:
+        cell = next(line for line in out.splitlines() if " kaggle " in line).split()[2:4]
+        return float(cell[0]) * (60 if cell[1] == "h" else 1)
+
+    assert kaggle_minutes(mirrored) < kaggle_minutes(plain)  # no 41.5 GB download
