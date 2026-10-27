@@ -309,7 +309,10 @@ def kaggle_unusable(a: argparse.Namespace, w, hours: float) -> str | None:
 def hf_unusable(api) -> str | None:
     if not os.environ.get("HF_BUCKET"):
         return "HF_BUCKET not set"
-    me = api.whoami()
+    try:
+        me = api.whoami()
+    except Exception as e:  # network blip or rate limit: skip HF rather than crash
+        return f"cannot reach the Hub ({type(e).__name__})"
     if not (me.get("isPro") or me.get("canPay") or me.get("orgs")):
         return "account cannot run Jobs (needs PRO or billing)"
     return None
@@ -340,8 +343,9 @@ def auto(a: argparse.Namespace, overrides: list[str]) -> int:
     plan.predict(w, kaggle, timeout_h)
     kaggle.why_not = kaggle_unusable(a, w, kaggle.hours)
     hf = plan.hf_options(api)
+    hf_why = hf_unusable(api)  # once: whoami is rate-limited
     for o in hf:
-        o.why_not = hf_unusable(api)
+        o.why_not = hf_why
     deadline_h = a.deadline and seconds(a.deadline) / 3600
     timeout_given = a.timeout
     while True:
