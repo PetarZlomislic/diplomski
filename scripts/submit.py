@@ -293,13 +293,21 @@ def kaggle_unusable(a: argparse.Namespace, w, hours: float) -> str | None:
     if re.search(r"running|queued", status, re.IGNORECASE):
         return f"{kernel} is still running (a push would replace it)"
     if w.gpu:
-        res = subprocess.run(["kaggle", "quota", "--format", "json"], capture_output=True,
-                             text=True, env=env)
-        try:  # the CLI may print an "outdated version" warning line before the JSON
-            quota = json.loads(res.stdout[res.stdout.index("["):])
-            gpu = next(q for q in quota if q["resource"] == "GPU")
-        except (ValueError, StopIteration):
-            return "cannot read the GPU quota (`kaggle quota`)"
+        gpu, err = None, ""
+        for attempt in range(3):  # transient network errors happen; retry before giving up
+            res = subprocess.run(["kaggle", "quota", "--format", "json"], capture_output=True,
+                                 text=True, env=env)
+            try:  # the CLI may print an "outdated version" warning line before the JSON
+                quota = json.loads(res.stdout[res.stdout.index("["):])
+                gpu = next(q for q in quota if q["resource"] == "GPU")
+                break
+            except (ValueError, StopIteration):
+                lines = [ln for ln in (res.stderr + res.stdout).splitlines()
+                         if ln.strip() and "outdated" not in ln]
+                err = (lines or [""])[-1][:120]
+                time.sleep(5 * (attempt + 1))
+        if gpu is None:
+            return f"cannot read the GPU quota (`kaggle quota`: {err or 'no JSON'})"
         left = float(gpu["remaining"].rstrip("h"))
         if left < hours * plan.SAFETY:
             return f"GPU quota {left:g} h left (refills {gpu['refreshAt']})"
