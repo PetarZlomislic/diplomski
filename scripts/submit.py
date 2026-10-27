@@ -254,8 +254,11 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
     print(f"pushed {kernel}; polling every 30s")
     status = ""
     while True:
-        res = subprocess.run(["kaggle", "kernels", "status", kernel], capture_output=True,
-                             text=True)
+        try:  # a call that never answers must not freeze the wait (it once hung for 2 h)
+            res = subprocess.run(["kaggle", "kernels", "status", kernel], capture_output=True,
+                                 text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            res = subprocess.CompletedProcess([], 1, "", "status call timed out after 120 s")
         m = re.search(r"KernelWorkerStatus\.(\w+)", res.stdout)
         now = time.strftime("%H:%M:%S", time.gmtime())
         if not m:  # network blip or CLI error: the kernel keeps running, so keep polling
@@ -269,13 +272,30 @@ def submit_kaggle(a: argparse.Namespace, overrides: list[str]) -> int:
         time.sleep(30)
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "kernel_log.json").open("w") as f:
-        subprocess.run(["kaggle", "kernels", "logs", kernel], stdout=f, stderr=subprocess.STDOUT)
-    try:  # `kernels output` can hang when a failed kernel produced no files; bound it
-        subprocess.run(["kaggle", "kernels", "output", kernel, "-p", str(out_dir)], timeout=600)
-    except subprocess.TimeoutExpired:
-        print("warning: output download timed out", file=sys.stderr)
+        subprocess.run(["kaggle", "-W", "kernels", "logs", kernel], stdout=f,
+                       stderr=subprocess.STDOUT, timeout=600)
+    download_outputs(kernel, out_dir)
     print(f"outputs: {out_dir} (execution log: {out_dir / 'kernel_log.json'})")
     return 0 if status == "COMPLETE" else 1
+
+
+def download_outputs(kernel: str, out_dir: Path) -> int:
+    """Every output file of the kernel's latest version. The CLI pages its results (20 files
+    by default), so follow the page tokens; returns the number of files downloaded."""
+    token, n = None, 0
+    while True:
+        cmd = ["kaggle", "-W", "kernels", "output", kernel, "-p", str(out_dir),
+               "--page-size", "200", *(["--page-token", token] if token else [])]
+        try:  # `kernels output` can hang when a failed kernel produced no files; bound it
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        except subprocess.TimeoutExpired:
+            print("warning: output download timed out", file=sys.stderr)
+            return n
+        n += res.stdout.count("downloaded to")
+        m = re.search(r"Next Page Token = (\S+)", res.stdout)
+        if not m:
+            return n
+        token = m[1]
 
 
 # ---------------------------------------------------------------- auto: speed vs price

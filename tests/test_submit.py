@@ -395,3 +395,37 @@ def test_auto_with_a_mirror_needs_no_token_and_no_download(submit, fake_cloud) -
         return float(cell[0]) * (60 if cell[1] == "h" else 1)
 
     assert kaggle_minutes(mirrored) < kaggle_minutes(plain)  # no 41.5 GB download
+
+
+def test_output_download_follows_page_tokens(submit, monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        page = "" if "--page-token" not in cmd else cmd[cmd.index("--page-token") + 1]
+        files = "".join(f"Output file downloaded to x/{page}{i}\n" for i in range(3))
+        nxt = "Next Page Token = tok2\n" if not page else ""
+        return subprocess.CompletedProcess(cmd, 0, files + nxt, "")
+
+    monkeypatch.setattr(submit.mod.subprocess, "run", run)
+    assert submit.mod.download_outputs("acme/k", tmp_path) == 6
+    assert [c[-1] for c in calls] == ["200", "tok2"]  # first page, then the token
+
+
+def test_hung_status_call_is_retried_not_waited_on(submit, fake_cloud, monkeypatch) -> None:
+    inner = submit.mod.subprocess.run
+    state = {"hung": False}
+
+    def run(cmd, **kw):
+        if cmd[:3] == ["kaggle", "kernels", "status"] and "timeout" in kw and not state["hung"]:
+            state["hung"] = True
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        if cmd[:3] == ["kaggle", "kernels", "push"] or cmd[1:4] in (
+                ["-W", "kernels", "logs"], ["-W", "kernels", "output"]):
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return inner(cmd, **kw)
+
+    monkeypatch.setattr(submit.mod.subprocess, "run", run)
+    monkeypatch.setattr(submit.mod.time, "sleep", lambda s: None)
+    out = submit("kaggle", *PILOT, "model=opt")
+    assert "status call timed out after 120 s" in out and "acme/rob-train: COMPLETE" in out

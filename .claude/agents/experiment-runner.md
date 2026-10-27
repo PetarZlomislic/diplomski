@@ -79,6 +79,8 @@ with post-run commands and a time/price preference. If it is ambiguous, ask; do 
 | `Dataset '<repo>' not found` + `"token": true` | The token in the Kaggle secret cannot read that private repo (fine-grained without repo access, or another account) | User: give the token read access to the repo or use a Read token; update the secret |
 | `Server disconnected` / `ConnectError` from `whoami` or `kaggle` locally | Local network blip or Hub rate limit | Fixed: auto calls whoami once and skips HF on errors; Kaggle polling retries. Just rerun |
 | `socket.gaierror: getaddrinfo failed` in the submit log | Local DNS/network outage while polling | Kernel keeps running remotely; check `kaggle kernels status`, then fetch logs/outputs by hand: `kaggle kernels output <kernel> -p outputs/kaggle/<safe>/<sha>` |
+| Submit log silent for hours although the kernel finished (a `kaggle.exe` lingering) | A `kaggle kernels status` call hung on the network; the poll had no timeout | Fixed: status calls time out after 120 s and are retried. If an old poller is stuck, stop its background task and fetch outputs by hand |
+| Only some run dirs downloaded (e.g. 2 of 6) | `kaggle kernels output` returns 20 files per page | Fixed: `download_outputs` follows page tokens (`--page-size 200`). By hand: repeat with `--page-token <Next Page Token>` |
 | `error: working tree is dirty` | Uncommitted changes; the job would run HEAD, not them | Ask the user about their changes; commit + push (`--allow-dirty` only for dry runs) |
 | raw.githubusercontent 404 / bootstrap cannot fetch tarball | Commit not pushed | `git push` |
 | `only N GB free ... need >= M GB` | Disk too small for the datasets | `auto` sizes disk = datasets + 5 GB; pick a larger flavor or `--min-disk` |

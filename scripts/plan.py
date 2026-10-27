@@ -38,7 +38,11 @@ BW_PER_VCPU, BW_MAX = 0.035, 1.0  # GB/s
 RUN_SETUP_S = 12
 GPU_FACTOR = {"T4": 0.4, "P100": 0.45, "L4": 0.75, "A10G": 1.0, "L40S": 2.0, "A100": 2.2,
               "RTX PRO 6000": 2.6, "H100": 3.0, "H200": 3.2}
-KAGGLE = {"vcpu": 4, "gpu": "T4", "disk_gb": 50, "gpu_h": 9, "cpu_h": 12, "overhead_s": 150}
+# Kaggle, measured on the Exp1 pilot of 2026-10-27 (6 arms, 4.62 h): bootstrap 224 s, 41.5 GB
+# in 429 s, and every arm trained at ~300 samples/s whatever its model, so its 4 vCPUs set
+# the pace. worker_sps is fitted so the model reproduces that whole job (4.62 h).
+KAGGLE = {"vcpu": 4, "gpu": "T4", "disk_gb": 50, "gpu_h": 9, "cpu_h": 12, "overhead_s": 225,
+          "bw_gbs": 0.097, "worker_sps": 245}
 HF_OVERHEAD_S = 30
 SAFETY = 1.25  # predicted hours x this must fit caps and quota
 
@@ -77,6 +81,8 @@ class Option:
     disk_gb: float
     ram_gb: float
     overhead_s: float
+    bw_gbs: float | None = None  # None: from vCPUs (HF calibration)
+    worker_sps: float = PER_WORKER_SPS
     download_gb: float | None = None  # None: the job's datasets; Kaggle mirrors need none
     need_disk: float | None = None  # None: the job's disk need
     why_not: str | None = None
@@ -169,7 +175,8 @@ def hf_options(api) -> list[Option]:
 
 def kaggle_option() -> Option:
     return Option("kaggle", 0.0, KAGGLE["vcpu"], KAGGLE["gpu"], KAGGLE["disk_gb"], 30,
-                  KAGGLE["overhead_s"])
+                  KAGGLE["overhead_s"], bw_gbs=KAGGLE["bw_gbs"],
+                  worker_sps=KAGGLE["worker_sps"])
 
 
 def usable_workers(workers: int, vcpu: int) -> int:
@@ -179,12 +186,12 @@ def usable_workers(workers: int, vcpu: int) -> int:
 def job_hours(runs: list[RunWork] | None, data_gb: float, o: Option, timeout_h: float) -> float:
     if runs is None:
         return timeout_h
-    s = o.overhead_s + data_gb / min(BW_MAX, BW_PER_VCPU * o.vcpu)
+    s = o.overhead_s + data_gb / (o.bw_gbs or min(BW_MAX, BW_PER_VCPU * o.vcpu))
     for r in runs:
         flops = (r.width / 16) ** 2 * (r.image / 120) ** 2
         gpu = A10G_TRAIN_SPS.get(r.arm, DEFAULT_TRAIN_SPS) / flops * (
             GPU_FACTOR.get(o.gpu, 1.0) if o.gpu and r.gpu else CPU_FACTOR)
-        loader = PER_WORKER_SPS * usable_workers(r.workers, o.vcpu) * 120**2 / r.image**2
+        loader = o.worker_sps * usable_workers(r.workers, o.vcpu) * 120**2 / r.image**2
         o.loader_bound |= loader < gpu
         s += (RUN_SETUP_S + r.train * (1 / gpu + 1 / loader)
               + r.evals * (1 / (gpu * EVAL_SPEEDUP) + 1 / loader))
