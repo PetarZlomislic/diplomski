@@ -295,8 +295,9 @@ def kaggle_unusable(a: argparse.Namespace, w, hours: float) -> str | None:
     if w.gpu:
         res = subprocess.run(["kaggle", "quota", "--format", "json"], capture_output=True,
                              text=True, env=env)
-        try:
-            gpu = next(q for q in json.loads(res.stdout) if q["resource"] == "GPU")
+        try:  # the CLI may print an "outdated version" warning line before the JSON
+            quota = json.loads(res.stdout[res.stdout.index("["):])
+            gpu = next(q for q in quota if q["resource"] == "GPU")
         except (ValueError, StopIteration):
             return "cannot read the GPU quota (`kaggle quota`)"
         left = float(gpu["remaining"].rstrip("h"))

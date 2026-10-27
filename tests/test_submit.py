@@ -284,8 +284,9 @@ def fake_cloud(submit, monkeypatch, tmp_path):
 
     def fake_run(cmd, **kw):
         if cmd[:2] == ["kaggle", "quota"]:
-            out = json.dumps([{"resource": "GPU", "remaining": state["quota"],
-                               "refreshAt": "2026-10-24T00:00:00"}])
+            out = "Warning: Looks like you're using an outdated `kaggle` version\n" + json.dumps(
+                [{"resource": "GPU", "remaining": state["quota"],
+                  "refreshAt": "2026-10-24T00:00:00"}])
             return subprocess.CompletedProcess(cmd, 0, out, "")
         if cmd[:3] == ["kaggle", "kernels", "status"]:
             state["polls"] = state.get("polls", 0) + 1
