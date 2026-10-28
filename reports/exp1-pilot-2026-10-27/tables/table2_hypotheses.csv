@@ -1,0 +1,8 @@
+hypothesis,scope,verdict,evidence,action
+H1,clean macro-F1,inconclusive,opt 0.548; early 0.561; late 0.564; gate_global 0.556; gate_spatial 0.558,
+H2,"AUDC drop, cloud vs speckle",inconclusive,early drop(cloud)-drop(speckle) 0.183; late drop(cloud)-drop(speckle) 0.039; gate_global drop(cloud)-drop(speckle) 0.120; gate_spatial drop(cloud)-drop(speckle) 0.022,
+H3,AUDC_rel under cloud,rejected,gate_global 0.558; gate_spatial 0.660; late 0.672; early 0.615,gate not learning what is claimed
+H3,AUDC_rel under drop_optical,inconclusive,gate_global 0.773; gate_spatial 0.755; late 0.835; early 0.577,
+H4,"gate_spatial vs gate_global, AUDC_rel",inconclusive,cloud: spatial 0.660 vs global 0.558; speckle: spatial 0.699 vs global 0.774; drop_optical: spatial 0.755 vs global 0.773; drop_sar: spatial 0.936 vs global 0.960,
+H5,"|Spearman(params, AUDC)| < 0.8",held,cloud rho=-0.20; drop_optical rho=0.12; drop_sar rho=0.41; speckle rho=-0.03; temporal rho=-0.12,
+H6,AUDC_rel under temporal,inconclusive,early 0.940; gate_global 0.943; gate_spatial 0.938,

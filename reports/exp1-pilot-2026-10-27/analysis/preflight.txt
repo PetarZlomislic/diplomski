@@ -1,0 +1,48 @@
+Traceback (most recent call last):
+  File "C:\Users\zlomi\projects\robustness-eval\.venv\Lib\site-packages\hydra\_internal\instantiate\_instantiate2.py", line 129, in _call_target
+    result = _target_(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\src\data.py", line 196, in __init__
+    stats = band_stats or load_manifest(self.data_uri).get("band_stats")
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\src\data.py", line 151, in load_manifest
+    return json.loads((Path(base) / "manifest.json").read_text())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\pathlib.py", line 1027, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\zlomi\\projects\\robustness-eval\\data\\peroz1\\reben-sweep\\manifest.json'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\zlomi\projects\robustness-eval\src\preflight.py", line 214, in <module>
+    main()
+  File "C:\Users\zlomi\projects\robustness-eval\src\preflight.py", line 205, in main
+    results = preflight(args.root, refs, args.tolerance, args.batches, args.degradations)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\src\preflight.py", line 183, in preflight
+    dm = _datamodule(run_dirs[0])
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\src\preflight.py", line 63, in _datamodule
+    dm = instantiate(OmegaConf.load(run_dir / RUN_CONFIG).cfg.data)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\.venv\Lib\site-packages\hydra\_internal\instantiate\_instantiate2.py", line 251, in instantiate
+    return _instantiate_impl(config, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\.venv\Lib\site-packages\hydra\_internal\instantiate\_instantiate2.py", line 299, in _instantiate_impl
+    return instantiate_node(
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\.venv\Lib\site-packages\hydra\_internal\instantiate\_instantiate2.py", line 420, in instantiate_node
+    return _call_target(_target_, partial, args, kwargs, full_key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\zlomi\projects\robustness-eval\.venv\Lib\site-packages\hydra\_internal\instantiate\_instantiate2.py", line 138, in _call_target
+    raise InstantiationException(_with_full_key(msg, full_key)) from e
+hydra.errors.InstantiationException: Error in call to target 'src.data.StreamingDataModule':
+FileNotFoundError(2, 'No such file or directory')
+full_key: cfg.data

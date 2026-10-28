@@ -1,0 +1,7 @@
+degradation,order_AUDC,order_AUDC_rel,disagree
+cloud,sar > late > gate_spatial > early > gate_global > opt,sar > late > gate_spatial > early > gate_global > opt,False
+drop_optical,late > sar > gate_global > gate_spatial > early > opt,sar > late > gate_global > gate_spatial > early > opt,True
+drop_sar,opt > gate_global > gate_spatial > late > early > sar,opt > gate_global > gate_spatial > late > early > sar,False
+none,late > early > gate_spatial > gate_global > opt > sar,early > gate_global > gate_spatial > late > opt > sar,True
+speckle,opt > early > gate_global > late > gate_spatial > sar,opt > early > gate_global > late > gate_spatial > sar,False
+temporal,opt > early > late > gate_global > gate_spatial > sar,opt > gate_global > early > gate_spatial > late > sar,True

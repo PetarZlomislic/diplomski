@@ -1,0 +1,2 @@
+pilot_train_samples_per_epoch,pilot_mean_samples_per_s,pilot_train_h_per_arm,pilot_eval_h_per_arm,stage2_train_h_per_run,stage2_eval_h_per_run,stage2_runs,stage2_total_h
+35712.0,426.4781111111111,0.5005592592592594,0.23784027777777778,6.668264536248839,2.6426697530864205,18,167.59681720803468
